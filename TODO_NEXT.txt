@@ -1,0 +1,210 @@
+Nifty Options Algo Bot - Next Steps
+Generated: 2026-05-02
+
+Dashboard
+---------
+Dashboard URL:
+http://127.0.0.1:5000
+
+Oracle Cloud hosting notes:
+See oraclecloud.md
+
+Current dashboard-only command:
+conda activate option_bot_312
+python main.py --dashboard
+
+When the full paper bot is running, the same dashboard URL shows live paper
+positions, P&L, trades, global context, and sentiment.
+
+
+Backtest Findings
+-----------------
+Recent expanded backtest tested the existing strategies plus experimental
+backtester-only ideas:
+
+- Existing:
+  - ScalpMomentum
+  - MeanReversion
+  - VWAPReversion
+  - RSIDivergence
+  - ORBBreakout
+  - SuperTrendMomentum
+  - EMACrossover
+
+- Experimental:
+  - TrendRider
+  - VWAPReclaim
+  - OpeningDrive
+  - BollingerReversal
+
+Best result from the latest 5-day sample:
+
+- Strategy: RSIDivergence
+- Index: FINNIFTY
+- Trades: 16
+- Win rate: 62.5%
+- Net P&L: +Rs 2,837.14
+- Profit factor: 1.50
+- Max drawdown: Rs 3,161.61
+
+Weak / avoid for now:
+
+- BANKNIFTY showed large drawdowns.
+- MeanReversion had decent win rate but negative P&L after losses and charges.
+- BollingerReversal was weak, especially on BANKNIFTY.
+- Newly tested TrendRider, VWAPReclaim, and OpeningDrive were too selective in
+  the 5-day sample and did not improve performance.
+
+
+Accepted Remedy
+---------------
+Do not run all strategies blindly in live/paper mode yet.
+
+Implemented paper-trading focus:
+
+1. Active execution allowlist defaults to FINNIFTY + RSIDivergence.
+2. Other valid strategy signals are shadow-logged to logs/shadow_signals.csv.
+3. Paper capital defaults to Rs 100,000.
+4. Max capital per trade defaults to Rs 10,000.
+5. BANKNIFTY remains observation-only unless explicitly added to allowlist.
+6. Use paper trading only for Monday, 2026-05-04.
+7. Backtest 30-60 trading days before considering live money.
+8. Eventually replace simulated option premium backtesting with real historical
+   option candle data.
+
+
+Important Code Changes Already Made
+-----------------------------------
+1. Added local pandas_ta.py compatibility shim because the installed pandas_ta
+   package was hanging on import in this environment.
+
+2. Changed Loguru file logging enqueue=False in config/logging_config.py because
+   multiprocessing queue pipes failed in the Windows sandbox.
+
+3. Improved utils/backtester.py:
+   - yfinance cache is kept inside logs/yfinance_cache.
+   - Dhan historical data is used as fallback when yfinance fails.
+   - Backtest JSON export falls back to a timestamped file if the default file
+     is locked.
+   - Option premium marking is now direction-aware, so CE and PE trades are
+     valued more realistically.
+   - Open trades are squared off at the final available bar.
+   - Experimental backtester-only strategies were added.
+
+4. Added active + shadow strategy controls:
+   - PAPER_CAPITAL=100000
+   - MAX_CAPITAL_PER_TRADE=10000
+   - ACTIVE_STRATEGY_ALLOWLIST=FINNIFTY:RSIDivergence
+   - SHADOW_SIGNAL_LOG=true
+   - SHADOW_LOG_FILE=logs/shadow_signals.csv
+   - Non-allowlisted strategy signals are observed and logged, not executed.
+
+5. Added oraclecloud.md with Oracle Cloud Always Free VM setup steps.
+
+
+Setup From Scratch
+------------------
+Use Anaconda / Miniconda Prompt, or a PowerShell where conda is available.
+
+1. Go to the project folder:
+
+   cd C:\genai\option
+
+2. Create the conda environment:
+
+   conda create -n option_bot_312 python=3.12
+
+3. Activate it:
+
+   conda activate option_bot_312
+
+4. Install dependencies:
+
+   pip install -r requirements.txt
+
+5. Optional but recommended for news sentiment:
+
+   python -c "import nltk; nltk.download('vader_lexicon')"
+
+6. Create .env from the example if needed:
+
+   copy .env.example .env
+
+7. Edit .env and set at least:
+
+   MODE=paper
+   PAPER_CAPITAL=100000
+   MAX_CAPITAL_PER_TRADE=10000
+   ACTIVE_STRATEGY_ALLOWLIST=FINNIFTY:RSIDivergence
+   SHADOW_SIGNAL_LOG=true
+   SHADOW_LOG_FILE=logs/shadow_signals.csv
+   DHAN_CLIENT_ID=your_client_id
+   DHAN_ACCESS_TOKEN=your_access_token
+
+
+Run Commands
+------------
+Always activate the environment first:
+
+conda activate option_bot_312
+cd C:\genai\option
+
+Dashboard only:
+
+python main.py --dashboard
+
+Backtest:
+
+python main.py --backtest
+
+Paper trading:
+
+python main.py --mode paper
+
+Daily report:
+
+python main.py --report
+
+Weekly report:
+
+python main.py --weekly
+
+
+Monday Paper Trading Plan - 2026-05-04
+--------------------------------------
+1. Before market open, confirm .env has valid Dhan credentials.
+2. Activate environment:
+
+   conda activate option_bot_312
+   cd C:\genai\option
+
+3. Start paper trading:
+
+   python main.py --mode paper
+
+4. Open dashboard:
+
+   http://127.0.0.1:5000
+
+5. Watch:
+   - Open positions
+   - Day P&L
+   - Strategy names in logs
+   - Shadow signals in logs/shadow_signals.csv
+   - Any API/data errors
+
+6. Keep it paper-only. Do not use live mode until the strategy passes longer
+   backtests and forward paper observation.
+
+
+Next Engineering Tasks
+----------------------
+1. Add a longer 30-60 day backtest mode.
+
+2. Save trade-level backtest details, not only summary metrics.
+
+3. Improve dashboard to show strategy-wise and shadow-signal performance.
+
+4. Source real historical option candles for accurate options backtesting.
+
+5. Host the bot on Oracle Cloud Always Free VM using oraclecloud.md.

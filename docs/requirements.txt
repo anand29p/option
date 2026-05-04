@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────
+# Nifty Options Algo Trader — Requirements
+# Python 3.10+
+# ─────────────────────────────────────────────
+
+# Zerodha Kite Connect SDK
+kiteconnect==5.0.1
+
+# Data & Analysis
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.13.0
+
+# Technical Indicators
+pandas-ta==0.3.14b
+ta==0.11.0
+
+# Scheduling & Time
+APScheduler==3.10.4
+pytz==2024.1
+
+# HTTP & Async
+requests==2.32.3
+httpx==0.27.0
+websocket-client==1.8.0
+
+# Environment & Config
+python-dotenv==1.0.1
+
+# Logging & Reporting
+loguru==0.7.2
+rich==13.7.1          # Pretty console output
+tabulate==0.9.0
+
+# CSV / Excel Reports
+openpyxl==3.1.3
+xlsxwriter==3.2.0
+
+# Data persistence (lightweight)
+tinydb==4.8.0          # JSON-based local DB for paper trades
+SQLAlchemy==2.0.30     # Optional: switch to SQLite for larger history
+
+# Testing
+pytest==8.2.2
+pytest-cov==5.0.0
+
+# Utilities
+python-dateutil==2.9.0
+click==8.1.7            # CLI interface for main.py
+colorama==0.4.6

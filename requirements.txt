@@ -1,0 +1,16 @@
+dhanhq>=2.2.0
+pandas>=2.0.0
+pandas-ta
+numpy
+loguru>=0.7.0
+python-dotenv>=1.0.0
+tzdata>=2023.3
+APScheduler>=3.10.1
+rich>=13.4.2
+pytest>=7.4.0
+click>=8.1.0
+tinydb>=4.8.0
+flask>=3.0.0
+yfinance>=0.2.40
+feedparser>=6.0.10
+nltk>=3.8.1

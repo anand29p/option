@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NiftyBot — Options Trading Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:          #0b0e1a;
+    --surface:     #111827;
+    --surface2:    #1a2236;
+    --border:      #1f2d45;
+    --accent:      #3b82f6;
+    --accent2:     #6366f1;
+    --green:       #10b981;
+    --red:         #ef4444;
+    --yellow:      #f59e0b;
+    --text:        #e2e8f0;
+    --muted:       #64748b;
+    --topbar-grad-start: #0f1929;
+    --topbar-grad-end:   #131f35;
+    --table-row-border:  rgba(255,255,255,0.04);
+    --table-row-hover:   rgba(255,255,255,0.02);
+    --chart-grid-x:      rgba(255,255,255,0.04);
+    --chart-grid-y:      rgba(255,255,255,0.06);
+    --chart-ticks:       #64748b;
+    --logo-grad-1:       #3b82f6;
+    --logo-grad-2:       #8b5cf6;
+    --radius:      12px;
+    --radius-sm:   8px;
+  }
+
+  :root[data-theme="light"] {
+    --bg:          #f5f8ff;
+    --surface:     #ffffff;
+    --surface2:    #eef3ff;
+    --border:      #d7e2f5;
+    --accent:      #2563eb;
+    --accent2:     #0ea5e9;
+    --green:       #059669;
+    --red:         #dc2626;
+    --yellow:      #b45309;
+    --text:        #10233f;
+    --muted:       #4f6b8f;
+    --topbar-grad-start: #dfeafc;
+    --topbar-grad-end:   #edf3ff;
+    --table-row-border:  rgba(16,35,63,0.08);
+    --table-row-hover:   rgba(37,99,235,0.06);
+    --chart-grid-x:      rgba(16,35,63,0.09);
+    --chart-grid-y:      rgba(16,35,63,0.12);
+    --chart-ticks:       #36557d;
+    --logo-grad-1:       #1d4ed8;
+    --logo-grad-2:       #0284c7;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+  }
+
+  /* ── Topbar ── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px;
+    background: linear-gradient(90deg, var(--topbar-grad-start) 0%, var(--topbar-grad-end) 100%);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 14px; }
+  .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--logo-grad-1), var(--logo-grad-2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .mode-badge {
+    padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3);
+    color: var(--accent); letter-spacing: 0.5px;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 20px; }
+  .theme-toggle {
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s ease;
+  }
+  .theme-toggle:hover {
+    border-color: rgba(59,130,246,0.35);
+    transform: translateY(-1px);
+  }
+  .clock { font-family: 'JetBrains Mono', monospace; color: var(--muted); font-size: 13px; }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.3)} }
+
+  /* ── Layout ── */
+  .main { padding: 24px 28px; max-width: 1600px; margin: 0 auto; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .grid-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: rgba(59,130,246,0.3); }
+  .card-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px;
+  }
+  .card-title { font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; }
+  .card-badge { font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .badge-green { background: rgba(16,185,129,.15); color: var(--green); border: 1px solid rgba(16,185,129,.2); }
+  .badge-red   { background: rgba(239,68,68,.15);  color: var(--red);   border: 1px solid rgba(239,68,68,.2); }
+  .badge-blue  { background: rgba(59,130,246,.15); color: var(--accent); border: 1px solid rgba(59,130,246,.2); }
+  .badge-yellow{ background: rgba(245,158,11,.15); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
+
+  /* ── Stat cards ── */
+  .stat-value { font-size: 28px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+    line-height: 1.1; margin: 4px 0; }
+  .stat-sub   { font-size: 12px; color: var(--muted); }
+  .stat-green { color: var(--green); }
+  .stat-red   { color: var(--red); }
+  .stat-blue  { color: var(--accent); }
+  .stat-white { color: var(--text); }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--muted);
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--table-row-border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--table-row-hover); }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .pnl-pos { color: var(--green); font-weight: 600; }
+  .pnl-neg { color: var(--red);   font-weight: 600; }
+  .empty-row { text-align: center; color: var(--muted); padding: 32px; font-size: 13px; }
+
+  /* ── Sentiment strip ── */
+  .sentiment-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    background: var(--surface2); border: 1px solid var(--border); margin-bottom: 10px; }
+  .sent-label { font-weight: 700; font-size: 13px; min-width: 80px; }
+  .sent-bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .sent-bar-fill  { height: 100%; border-radius: 3px; transition: width .5s; }
+  .sent-count  { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  /* ── Global markets grid ── */
+  .market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .market-item { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 12px 14px; transition: all .2s; }
+  .market-item:hover { border-color: rgba(59,130,246,.3); transform: translateY(-1px); }
+  .market-name  { font-size: 10px; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .market-price { font-family: 'JetBrains Mono', monospace; font-size: 14px;
+    font-weight: 600; color: var(--text); }
+  .market-chg   { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500; }
+
+  /* ── Chart ── */
+  .chart-wrap { position: relative; height: 200px; }
+
+  /* ── Headline list ── */
+  .headline-list { list-style: none; }
+  .headline-list li { padding: 8px 0; border-bottom: 1px solid var(--table-row-border);
+    font-size: 12px; line-height: 1.5; color: var(--text); display: flex;
+    align-items: flex-start; gap: 8px; }
+  .headline-list li:last-child { border-bottom: none; }
+  .hl-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+  .hl-score { font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--muted); white-space: nowrap; }
+
+  /* ── Tag chips ── */
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px; }
+  .chip-ce  { background: rgba(16,185,129,.15); color: var(--green); }
+  .chip-pe  { background: rgba(239,68,68,.15);  color: var(--red);   }
+  .chip-sl  { background: rgba(239,68,68,.1);   color: #f87171; }
+  .chip-tgt { background: rgba(16,185,129,.1);  color: #34d399; }
+
+  /* ── Section title ── */
+  .section-title { font-size: 13px; font-weight: 600; color: var(--text);
+    margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .section-title span { color: var(--muted); font-size: 11px; font-weight: 400; }
+
+  /* ── Responsive ── */
+  @media (max-width: 1100px) { .grid-4 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 768px)  { .grid-4,.grid-2,.grid-3 { grid-template-columns: 1fr; }
+    .main { padding: 16px; } }
+</style>
+</head>
+<body>
+
+<!-- ── Topbar ─────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="logo">⚡ NiftyBot</span>
+    <span class="mode-badge" id="mode-badge">PAPER MODE</span>
+  </div>
+  <div class="topbar-right">
+    <button class="theme-toggle" id="theme-toggle" type="button">☀ Light</button>
+    <span class="pulse" id="live-dot"></span>
+    <span class="clock" id="clock">—</span>
+  </div>
+</header>
+
+<!-- ── Main ──────────────────────────────────────────────────── -->
+<main class="main">
+
+  <!-- Stat cards -->
+  <div class="grid-4">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Capital</span>
+        <span class="card-badge badge-blue">Available</span>
+      </div>
+      <div class="stat-value stat-blue" id="stat-capital">₹—</div>
+      <div class="stat-sub" id="stat-avail">Available: ₹—</div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Day P&L</span>
+        <span class="card-badge badge-green" id="pnl-badge">TODAY</span>
+      </div>
+      <div class="stat-value" id="stat-pnl">₹—</div>
+      <div class="stat-sub" id="stat-pnl-pct">Net after charges</div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Open Positions</span>
+        <span class="card-badge badge-blue" id="open-badge">0</span>
+      </div>
+      <div class="stat-value stat-white" id="stat-open">0</div>
+      <div class="stat-sub">Active trades</div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Total Trades</span>
+        <span class="card-badge badge-blue">CLOSED</span>
+      </div>
+      <div class="stat-value stat-white" id="stat-trades">0</div>
+      <div class="stat-sub" id="stat-date">—</div>
+    </div>
+  </div>
+
+  <!-- Middle row: Chart + Sentiment + Global -->
+  <div class="grid-3">
+
+    <!-- P&L Curve -->
+    <div class="card">
+      <div class="section-title">📈 Cumulative P&L Curve <span>All sessions</span></div>
+      <div class="chart-wrap">
+        <canvas id="pnlChart"></canvas>
+      </div>
+    </div>
+
+    <!-- News Sentiment -->
+    <div class="card">
+      <div class="section-title">📰 Market Sentiment <span>ET·MC·BS RSS</span></div>
+      <div id="sentiment-block">
+        <div class="sentiment-bar">
+          <span class="sent-label" id="sent-label" style="color:#64748b">—</span>
+          <div class="sent-bar-track">
+            <div class="sent-bar-fill" id="sent-fill" style="width:50%;background:#3b82f6"></div>
+          </div>
+          <span class="sent-count" id="sent-count">0 headlines</span>
+        </div>
+        <ul class="headline-list" id="headline-list">
+          <li><span style="color:var(--muted)">Loading headlines…</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Global Markets -->
+    <div class="card">
+      <div class="section-title">🌍 Global Markets <span id="global-source">via loading</span></div>
+      <div class="market-grid" id="global-grid">
+        <div class="market-item">
+          <div class="market-name">Loading…</div>
+          <div class="market-price">—</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Open Positions -->
+  <div class="card" style="margin-bottom:24px">
+    <div class="section-title">🔓 Open Positions <span id="pos-time"></span></div>
+    <div class="table-wrap">
+      <table id="positions-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Symbol</th><th>Strategy</th><th>Type</th>
+            <th>Entry ₹</th><th>LTP ₹</th><th>SL ₹</th><th>Target ₹</th>
+            <th>Qty</th><th>Unrealized P&L</th>
+          </tr>
+        </thead>
+        <tbody id="positions-body">
+          <tr><td colspan="10" class="empty-row">No open positions</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Trade History -->
+  <div class="card">
+    <div class="section-title">📋 Trade History <span>Last 50 closed trades</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th><th>Symbol</th><th>Strategy</th><th>Type</th>
+            <th>Entry ₹</th><th>Exit ₹</th><th>Reason</th><th>Net P&L</th>
+          </tr>
+        </thead>
+        <tbody id="trades-body">
+          <tr><td colspan="8" class="empty-row">No trade history yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── Helpers ────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = (n, d=2) => n == null ? '—' : n.toLocaleString('en-IN', {minimumFractionDigits:d, maximumFractionDigits:d});
+const fmtRs = (n) => n == null ? '—' : '₹' + fmt(n);
+const pnlClass = v => v >= 0 ? 'pnl-pos' : 'pnl-neg';
+const pnlSign  = v => v >= 0 ? '+₹' + fmt(v) : '−₹' + fmt(Math.abs(v));
+
+// ── Theme toggle ───────────────────────────────────────────────────────────
+const THEME_KEY = 'niftybot_theme';
+
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme, persist=true) {
+  const next = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  $('theme-toggle').textContent = next === 'light' ? '🌙 Dark' : '☀ Light';
+  if (persist) localStorage.setItem(THEME_KEY, next);
+  applyChartTheme();
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  const initial = saved === 'light' || saved === 'dark' ? saved : 'dark';
+  applyTheme(initial, false);
+  $('theme-toggle').addEventListener('click', () => {
+    applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+  });
+}
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  $('clock').textContent = now.toLocaleTimeString('en-IN', {
+    timeZone:'Asia/Kolkata', hour12:true,
+    hour:'2-digit', minute:'2-digit', second:'2-digit'
+  }) + ' IST';
+}
+setInterval(updateClock, 1000); updateClock();
+
+// ── P&L Chart ──────────────────────────────────────────────────────────────
+const ctx = document.getElementById('pnlChart').getContext('2d');
+let pnlChart = new Chart(ctx, {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Net P&L (₹)',
+    data: [],
+    borderColor: '#3b82f6',
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderWidth: 2,
+    pointRadius: 4,
+    pointBackgroundColor: '#3b82f6',
+    tension: 0.4,
+    fill: true,
+  }]},
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color:'rgba(255,255,255,0.04)' }, ticks: { color:'#64748b', font:{size:10} } },
+      y: { grid: { color:'rgba(255,255,255,0.06)' }, ticks: {
+        color:'#64748b', font:{size:10},
+        callback: v => '₹' + v.toLocaleString('en-IN')
+      }},
+    }
+  }
+});
+
+function applyChartTheme() {
+  if (!pnlChart) return;
+  const style = getComputedStyle(document.documentElement);
+  const gridX = style.getPropertyValue('--chart-grid-x').trim();
+  const gridY = style.getPropertyValue('--chart-grid-y').trim();
+  const ticks = style.getPropertyValue('--chart-ticks').trim();
+  pnlChart.options.scales.x.grid.color = gridX;
+  pnlChart.options.scales.y.grid.color = gridY;
+  pnlChart.options.scales.x.ticks.color = ticks;
+  pnlChart.options.scales.y.ticks.color = ticks;
+  pnlChart.update('none');
+}
+
+// ── Fetch functions ────────────────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const d = await fetch('/api/status').then(r=>r.json());
+    $('stat-capital').textContent = '₹' + fmt(d.capital, 0);
+    $('stat-avail').textContent   = 'Available: ₹' + fmt(d.available_capital, 0);
+    const pnl = d.daily_pnl ?? 0;
+    $('stat-pnl').textContent     = pnlSign(pnl);
+    $('stat-pnl').className       = 'stat-value ' + (pnl >= 0 ? 'stat-green' : 'stat-red');
+    $('pnl-badge').className      = 'card-badge ' + (pnl >= 0 ? 'badge-green' : 'badge-red');
+    $('stat-open').textContent    = d.open_positions ?? 0;
+    $('open-badge').textContent   = d.open_positions ?? 0;
+    $('stat-trades').textContent  = d.total_trades ?? 0;
+    $('stat-date').textContent    = d.date ?? '';
+    $('mode-badge').textContent   = (d.mode ?? 'PAPER') + ' MODE';
+  } catch(e) { console.warn('status:', e); }
+}
+
+async function fetchPositions() {
+  try {
+    const rows = await fetch('/api/positions').then(r=>r.json());
+    const tbody = $('positions-body');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="empty-row">No open positions</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(p => {
+      const unreal = p.unrealized ?? 0;
+      const optType = p.symbol?.includes('CE') ? 'CE' : 'PE';
+      return `<tr>
+        <td class="mono" style="color:var(--muted)">${p.trade_id}</td>
+        <td class="mono" style="font-weight:600">${p.symbol}</td>
+        <td>${p.strategy}</td>
+        <td><span class="chip chip-${optType.toLowerCase()}">${optType}</span></td>
+        <td class="mono">${fmtRs(p.entry_price)}</td>
+        <td class="mono" style="font-weight:600">${fmtRs(p.ltp)}</td>
+        <td class="mono" style="color:var(--red)">${fmtRs(p.stop_loss)}</td>
+        <td class="mono" style="color:var(--green)">${fmtRs(p.target)}</td>
+        <td class="mono">${p.quantity}</td>
+        <td class="mono ${pnlClass(unreal)}">${pnlSign(unreal)}</td>
+      </tr>`;
+    }).join('');
+    $('pos-time').textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:true});
+  } catch(e) { console.warn('positions:', e); }
+}
+
+async function fetchTrades() {
+  try {
+    const trades = await fetch('/api/trades').then(r=>r.json());
+    const tbody  = $('trades-body');
+    if (!trades.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-row">No trade history yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = trades.slice(0,50).map(t => {
+      const pnl    = parseFloat(t.net_pnl ?? 0);
+      const optType= (t.symbol ?? '').includes('CE') ? 'CE' : 'PE';
+      return `<tr>
+        <td style="color:var(--muted)">${t.date ?? ''}</td>
+        <td class="mono" style="font-weight:600">${t.symbol ?? ''}</td>
+        <td>${t.strategy ?? ''}</td>
+        <td><span class="chip chip-${optType.toLowerCase()}">${optType}</span></td>
+        <td class="mono">${fmtRs(t.entry_price)}</td>
+        <td class="mono">${fmtRs(t.exit_price)}</td>
+        <td><span class="chip ${t.exit_reason?.includes('target')? 'chip-tgt' : t.exit_reason?.includes('stop')? 'chip-sl':'badge-blue'}">${t.exit_reason ?? ''}</span></td>
+        <td class="mono ${pnlClass(pnl)}">${pnlSign(pnl)}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.warn('trades:', e); }
+}
+
+async function fetchPnlCurve() {
+  try {
+    const {labels, data} = await fetch('/api/pnl_curve').then(r=>r.json());
+    // Cumulative sum
+    let cum = 0;
+    const cumData = data.map(v => { cum += v; return parseFloat(cum.toFixed(2)); });
+    pnlChart.data.labels   = labels;
+    pnlChart.data.datasets[0].data = cumData;
+    // Color based on last value
+    const last = cumData[cumData.length-1] ?? 0;
+    pnlChart.data.datasets[0].borderColor = last >= 0 ? '#10b981' : '#ef4444';
+    pnlChart.data.datasets[0].backgroundColor = last >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)';
+    pnlChart.update();
+  } catch(e) { console.warn('pnl_curve:', e); }
+}
+
+async function fetchGlobal() {
+  try {
+    const d = await fetch('/api/global').then(r=>r.json());
+    const providerMap = {
+      TWELVE_DATA: 'Twelve Data',
+      ALPHA_VANTAGE: 'Alpha Vantage',
+      YFINANCE: 'yfinance',
+      NONE: 'none',
+    };
+    const sourceLabel = providerMap[d.provider] ?? (d.provider || 'unknown');
+    $('global-source').textContent = `via ${sourceLabel}`;
+
+    if (d.error) {
+      $('global-grid').innerHTML = `<div class="market-item">
+        <div class="market-name">No market data</div>
+        <div class="market-price">API error</div>
+        <div class="market-chg" style="color:var(--red)">${d.error}</div>
+      </div>`;
+      return;
+    }
+    const changes = d.pct_changes ?? {};
+    const prices  = d.prices ?? {};
+    const labels  = {
+      GIFT_NIFTY:'GIFT Nifty', DOW:'Dow Jones', SP500:'S&P 500',
+      NASDAQ:'Nasdaq', NIKKEI:'Nikkei', HANG_SENG:'Hang Seng',
+      DAX:'DAX', FTSE:'FTSE 100', CRUDE_OIL:'Crude Oil', USD_INR:'USD/INR',
+    };
+    const grid = $('global-grid');
+    const cards = Object.entries(labels).map(([key, name]) => {
+      const price = prices[key];
+      const chg   = changes[key];
+      if (price == null) return '';
+      const color = chg == null ? '#64748b' : chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const arrow = chg == null ? '' : chg >= 0 ? '▲' : '▼';
+      return `<div class="market-item">
+        <div class="market-name">${name}</div>
+        <div class="market-price">${fmt(price, key==='USD_INR'?3:0)}</div>
+        <div class="market-chg" style="color:${color}">${arrow} ${chg!=null? Math.abs(chg).toFixed(2)+'%' : ''}</div>
+      </div>`;
+    }).filter(Boolean);
+
+    if (!cards.length) {
+      grid.innerHTML = `<div class="market-item">
+        <div class="market-name">No market data</div>
+        <div class="market-price">Unavailable</div>
+        <div class="market-chg" style="color:var(--muted)">Retrying automatically</div>
+      </div>`;
+      return;
+    }
+
+    grid.innerHTML = cards.join('');
+  } catch(e) { console.warn('global:', e); }
+}
+
+async function fetchSentiment() {
+  try {
+    const d = await fetch('/api/sentiment').then(r=>r.json());
+    if (d.error) return;
+    const score = d.score ?? 0;
+    const label = d.label ?? 'NEUTRAL';
+    const sent  = $('sent-label');
+    const fill  = $('sent-fill');
+    const colors = {BULLISH:'var(--green)', NEUTRAL:'var(--accent)', BEARISH:'var(--red)'};
+    sent.textContent = label;
+    sent.style.color = colors[label] ?? 'var(--muted)';
+    // Map score -1…+1 → 0…100%
+    fill.style.width      = ((score + 1) / 2 * 100).toFixed(0) + '%';
+    fill.style.background = colors[label] ?? 'var(--accent)';
+    $('sent-count').textContent = (d.headline_count ?? 0) + ' headlines · conf ' + Math.round((d.confidence??0)*100) + '%';
+
+    const hl  = d.top_headlines ?? [];
+    const ul  = $('headline-list');
+    if (!hl.length) { ul.innerHTML = '<li><span style="color:var(--muted)">No headlines loaded</span></li>'; return; }
+    ul.innerHTML = hl.map(h => {
+      const c = h.score >= 0.05 ? 'var(--green)' : h.score <= -0.05 ? 'var(--red)' : 'var(--muted)';
+      return `<li>
+        <span class="hl-dot" style="background:${c}"></span>
+        <span style="flex:1">${h.headline}</span>
+        <span class="hl-score">${h.score>=0?'+':''}${h.score?.toFixed(2)}</span>
+      </li>`;
+    }).join('');
+  } catch(e) { console.warn('sentiment:', e); }
+}
+
+// ── Refresh cycles ──────────────────────────────────────────────────────────
+async function refreshFast() { await fetchStatus(); await fetchPositions(); }
+async function refreshSlow() { await fetchTrades(); await fetchPnlCurve(); }
+async function refreshMarket() { await fetchGlobal(); await fetchSentiment(); }
+
+// Initial load
+initTheme();
+refreshFast(); refreshSlow(); refreshMarket();
+
+// Polling intervals
+setInterval(refreshFast,   5_000);   // every 5 s
+setInterval(refreshSlow,  30_000);   // every 30 s
+setInterval(refreshMarket, 5 * 60_000); // every 5 min
+</script>
+</body>
+</html>

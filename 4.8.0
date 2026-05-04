@@ -1,0 +1,4 @@
+Requirement already satisfied: click in C:\Users\acer\miniconda3\envs\option_bot_312\Lib\site-packages (8.3.3)
+Requirement already satisfied: tinydb in C:\Users\acer\miniconda3\envs\option_bot_312\Lib\site-packages (4.8.2)
+Requirement already satisfied: colorama in C:\Users\acer\miniconda3\envs\option_bot_312\Lib\site-packages (from click) (0.4.6)
+
