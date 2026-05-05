@@ -28,7 +28,7 @@ from config.settings import (
     LOG_DIR, IST
 )
 from utils.tax_calculator import calculate_net_pnl
-from utils.market_data_recorder import load_recorded_ohlcv
+from utils.market_data_recorder import load_recorded_ohlcv, load_recorded_atm_options
 
 console = Console()
 
@@ -102,6 +102,40 @@ def _volume_ok(last: pd.Series, multiplier: float) -> bool:
     if vol <= 0 or avg <= 0:
         return True
     return vol > avg * multiplier
+
+
+def _lookup_recorded_option_price(
+    option_df: Optional[pd.DataFrame],
+    ts: datetime,
+    option_type: str,
+    spot_price: float,
+    max_lag_minutes: int = 3,
+) -> Optional[float]:
+    """Lookup nearest recorded ATM option premium around timestamp."""
+    if option_df is None or option_df.empty:
+        return None
+
+    try:
+        if option_df.index.tz is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=option_df.index.tz)
+    except Exception:
+        pass
+
+    # Keep a narrow time window to avoid stale premium marks.
+    win = option_df[(option_df.index >= ts - timedelta(minutes=max_lag_minutes)) & (option_df.index <= ts + timedelta(minutes=1))]
+    if win.empty:
+        return None
+
+    pick = win.iloc[-1]
+    col = "ce_ltp" if option_type == "CE" else "pe_ltp"
+    value = pick.get(col)
+    try:
+        price = float(value)
+        if price > 0:
+            return price
+    except Exception:
+        return None
+    return None
 
 
 # ── Strategy Signal Generators (standalone, no Kite dependency) ───────────────
@@ -363,6 +397,7 @@ def _backtest_strategy(
     df: pd.DataFrame,
     signal_fn,
     state: Optional[dict] = None,
+    option_df: Optional[pd.DataFrame] = None,
 ) -> BtResult:
     """Run one strategy on one index's historical data."""
     result = BtResult(strategy=name, index=index)
@@ -387,7 +422,14 @@ def _backtest_strategy(
 
         # EOD square-off at bar 360 (6 hrs × 60 min)
         if i % 375 == 374 and open_trade:
-            prem = _mark_premium(open_trade, bar["close"])
+            prem = _lookup_recorded_option_price(
+                option_df=option_df,
+                ts=time,
+                option_type=open_trade.option_type,
+                spot_price=float(bar["close"]),
+            )
+            if prem is None:
+                prem = _mark_premium(open_trade, bar["close"])
             pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
             open_trade.exit_bar    = i
             open_trade.exit_price  = prem
@@ -402,7 +444,14 @@ def _backtest_strategy(
 
         # Monitor open trade
         if open_trade:
-            prem = _mark_premium(open_trade, bar["close"])
+            prem = _lookup_recorded_option_price(
+                option_df=option_df,
+                ts=time,
+                option_type=open_trade.option_type,
+                spot_price=float(bar["close"]),
+            )
+            if prem is None:
+                prem = _mark_premium(open_trade, bar["close"])
             sl   = open_trade.entry_price * (1 - STOP_LOSS_PCT)
             tgt  = open_trade.entry_price * (1 + TARGET_PCT_MIN)
             reason = None
@@ -440,14 +489,22 @@ def _backtest_strategy(
 
         # Open new trade
         entry_spot = bar["close"]
-        entry_prem = _simulate_premium(entry_spot, index, sig.replace("BUY_", ""))
+        option_type = "CE" if sig == "BUY_CE" else "PE"
+        entry_prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=time,
+            option_type=option_type,
+            spot_price=float(entry_spot),
+        )
+        if entry_prem is None:
+            entry_prem = _simulate_premium(entry_spot, index, option_type)
         if entry_prem <= 0:
             continue
 
         open_trade = BtTrade(
             strategy    = name,
             index       = index,
-            option_type = "CE" if sig == "BUY_CE" else "PE",
+            option_type = option_type,
             entry_bar   = i,
             entry_spot  = entry_spot,
             entry_price = entry_prem,
@@ -456,7 +513,14 @@ def _backtest_strategy(
 
     if open_trade:
         bar = df.iloc[-1]
-        prem = _mark_premium(open_trade, bar["close"])
+        prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=df.index[-1],
+            option_type=open_trade.option_type,
+            spot_price=float(bar["close"]),
+        )
+        if prem is None:
+            prem = _mark_premium(open_trade, bar["close"])
         pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
         open_trade.exit_bar = len(df) - 1
         open_trade.exit_price = prem
@@ -557,7 +621,7 @@ def _generate_html_report(all_results: list[BtResult], days: int):
 </tbody>
 </table>
 <p style="color:#555;font-size:12px;margin-top:20px;">
-⚠️ Premium values are approximated (0.6–0.8% of spot). Real results require historical options data.
+⚠️ Backtester prefers recorded ATM option premiums from logs/market_data when present; otherwise it falls back to spot-based premium approximation.
 Generated: {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}
 </p>
 </body>
@@ -646,8 +710,11 @@ def run_backtest(days: int = 5):
         console.print(f"[yellow]▶ {index}  ({ticker})[/yellow]")
 
         df = load_recorded_ohlcv(index=index, days=days)
+        option_df = load_recorded_atm_options(index=index, days=days)
         if df is not None and not df.empty:
             logger.info(f"Using recorded local data for {index}: {len(df)} candles")
+            if option_df is not None and not option_df.empty:
+                logger.info(f"Using recorded ATM option premiums for {index}: {len(option_df)} rows")
         else:
             df = _fetch_yfinance(ticker, period=period, interval="1m")
         if df is None or df.empty:
@@ -669,7 +736,7 @@ def run_backtest(days: int = 5):
             ("ORBBreakout",    None),
         ]
         for name, fn in simple:
-            r = _backtest_strategy(name, index, df, fn, state={})
+            r = _backtest_strategy(name, index, df, fn, state={}, option_df=option_df)
             all_results.append(r)
             icon = "🟢" if r.net_pnl >= 0 else "🔴"
             console.print(
@@ -683,7 +750,7 @@ def run_backtest(days: int = 5):
             ("EMACrossover",       {"n": 0, "last_cross": 0}),
         ]
         for name, state in stateful:
-            r = _backtest_strategy(name, index, df, None, state=state)
+            r = _backtest_strategy(name, index, df, None, state=state, option_df=option_df)
             all_results.append(r)
             icon = "🟢" if r.net_pnl >= 0 else "🔴"
             console.print(

@@ -29,6 +29,7 @@ from reports.daily_report import generate_daily_report, generate_weekly_report
 from utils.global_context import get_global_context
 from utils.news_sentiment import get_news_sentiment
 from utils.market_data_recorder import MarketDataRecorder
+from utils.option_chain import get_nearest_weekly_expiry
 
 from loguru import logger
 
@@ -147,6 +148,17 @@ class AlgoBot:
             logger.debug(f"{index}: insufficient candle data")
             return
 
+        expiry = ""
+        chain_data = None
+        try:
+            expiry = get_nearest_weekly_expiry(self.dhan, index) or ""
+            if expiry:
+                chain_resp = self.dhan.get_option_chain(index, expiry)
+                if chain_resp and chain_resp.get("status") != "failure":
+                    chain_data = chain_resp.get("data", {})
+        except Exception as e:
+            logger.debug(f"{index}: option chain capture skipped ({e})")
+
         # Persist live market data for offline backtesting and model iteration.
         try:
             self.recorder.record_cycle(
@@ -155,6 +167,9 @@ class AlgoBot:
                 vix=vix,
                 df_1min=df_1min,
                 df_5min=df_5min,
+                option_chain=chain_data,
+                option_expiry=expiry,
+                strike_step=INDICES[index]["strike_step"],
             )
         except Exception as e:
             logger.debug(f"{index}: data recorder skipped ({e})")
