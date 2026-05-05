@@ -10,6 +10,25 @@ from zoneinfo import ZoneInfo
 
 load_dotenv()
 
+
+def _load_streamlit_secrets_into_env() -> None:
+    """Mirror Streamlit secrets into os.environ when running on Streamlit Cloud."""
+    try:
+        import streamlit as st
+    except Exception:
+        return
+
+    try:
+        for key in st.secrets:
+            value = st.secrets[key]
+            if isinstance(value, (str, int, float, bool)):
+                os.environ.setdefault(key, str(value))
+    except Exception:
+        return
+
+
+_load_streamlit_secrets_into_env()
+
 # ── Timezone ──────────────────────────────────────────────────────────────────
 IST = ZoneInfo("Asia/Kolkata")
 
