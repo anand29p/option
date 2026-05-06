@@ -633,6 +633,86 @@ Generated: {datetime.now(IST).strftime('%Y-%m-%d %H:%M IST')}
     return str(out)
 
 
+def _safe_write_csv(df: pd.DataFrame, filename: str) -> str:
+    """Write CSV to logs directory, falling back to a timestamped filename if needed."""
+    out = Path(LOG_DIR) / filename
+    try:
+        df.to_csv(out, index=False)
+    except PermissionError:
+        stamp = datetime.now(IST).strftime("%Y%m%d_%H%M%S")
+        out = Path(LOG_DIR) / f"{out.stem}_{stamp}{out.suffix}"
+        df.to_csv(out, index=False)
+    return str(out)
+
+
+def _export_csv_results(all_results: list[BtResult], days: int) -> tuple[Optional[str], Optional[str]]:
+    """Persist summary and per-trade backtest results as CSV files."""
+    generated_at = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+    summary_rows = [
+        {
+            "generated_at": generated_at,
+            "days": days,
+            "strategy": r.strategy,
+            "index": r.index,
+            "total_trades": r.total_trades,
+            "winners": r.winners,
+            "losers": r.losers,
+            "win_rate": r.win_rate,
+            "gross_pnl": round(r.gross_pnl, 2),
+            "total_charges": round(r.total_charges, 2),
+            "net_pnl": round(r.net_pnl, 2),
+            "max_drawdown": r.max_drawdown,
+            "profit_factor": r.profit_factor,
+            "avg_win": r.avg_win,
+            "avg_loss": r.avg_loss,
+        }
+        for r in all_results
+    ]
+
+    trade_rows = [
+        {
+            "generated_at": generated_at,
+            "days": days,
+            "strategy": t.strategy,
+            "index": t.index,
+            "option_type": t.option_type,
+            "entry_bar": t.entry_bar,
+            "entry_spot": round(t.entry_spot, 2),
+            "entry_price": round(t.entry_price, 2),
+            "exit_bar": t.exit_bar,
+            "exit_price": round(t.exit_price, 2),
+            "exit_reason": t.exit_reason,
+            "net_pnl": round(t.net_pnl, 2),
+            "charges": round(t.charges, 2),
+            "quantity": t.quantity,
+        }
+        for r in all_results
+        for t in r.trades
+    ]
+
+    summary_path = None
+    trades_path = None
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows).sort_values(
+            by=["net_pnl", "win_rate"],
+            ascending=[False, False],
+        )
+        summary_path = _safe_write_csv(summary_df, "backtest_results.csv")
+        logger.info(f"CSV summary → {summary_path}")
+
+    if trade_rows:
+        trades_df = pd.DataFrame(trade_rows).sort_values(
+            by=["strategy", "index", "entry_bar"],
+            ascending=[True, True, True],
+        )
+        trades_path = _safe_write_csv(trades_df, "backtest_trades.csv")
+        logger.info(f"CSV trades → {trades_path}")
+
+    return summary_path, trades_path
+
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 def _fetch_yfinance(ticker: str, period: str = "5d", interval: str = "1m") -> Optional[pd.DataFrame]:
@@ -662,7 +742,10 @@ def _fetch_yfinance(ticker: str, period: str = "5d", interval: str = "1m") -> Op
 
 
 def _fetch_dhan(client, index: str, days: int) -> Optional[pd.DataFrame]:
-    """Fetch index candles from Dhan when yfinance is unavailable."""
+    """Fetch index candles from Dhan when yfinance is unavailable.
+
+    Uses chunked date windows because large single-range minute requests can fail.
+    """
     try:
         from utils.dhan_client import DhanClient
 
@@ -671,16 +754,33 @@ def _fetch_dhan(client, index: str, days: int) -> Optional[pd.DataFrame]:
         sid = DhanClient.INDEX_SECURITY_IDS.get(index)
         if not sid:
             return None
+
         to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=max(days + 2, 7))
-        return client.get_historical_range(
-            security_id=sid,
-            from_date=from_date,
-            to_date=to_date,
-            interval="minute",
-            exchange=DhanClient.IDX_I,
-            instrument_type="INDEX",
-        )
+        chunk_days = 7
+        frames: list[pd.DataFrame] = []
+
+        cursor = from_date
+        while cursor <= to_date:
+            chunk_end = min(cursor + timedelta(days=chunk_days - 1), to_date)
+            df = client.get_historical_range(
+                security_id=sid,
+                from_date=cursor,
+                to_date=chunk_end,
+                interval="minute",
+                exchange=DhanClient.IDX_I,
+                instrument_type="INDEX",
+            )
+            if df is not None and not df.empty:
+                frames.append(df)
+            cursor = chunk_end + timedelta(days=1)
+
+        if not frames:
+            return None
+
+        out = pd.concat(frames).sort_index()
+        out = out[~out.index.duplicated(keep="last")]
+        return out
     except Exception as e:
         logger.error(f"Dhan historical fetch failed for {index}: {e}")
         return None
@@ -689,25 +789,18 @@ def _fetch_dhan(client, index: str, days: int) -> Optional[pd.DataFrame]:
 def run_backtest(days: int = 5):
     """
     Main backtester entry point.
-    Uses yfinance for historical OHLCV (free, no subscription needed).
-    Dhan API is used only for live trading (requires paid Data API for historical).
+    Uses local recorded candles first, then Dhan Data API for historical fallback.
     """
-    # yfinance tickers for Indian indices
-    INDEX_TICKERS = {
-        "NIFTY":     "^NSEI",
-        "BANKNIFTY": "^NSEBANK",
-        "FINNIFTY":  "NIFTY_FIN_SERVICE.NS",
-    }
-    period = f"{days}d"
+    indices = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
 
     console.print(f"\n[bold cyan]🔬 Running backtest — last {days} trading days[/bold cyan]")
-    console.print("[dim]Trying local recorded candles first, then yfinance fallback...[/dim]\n")
+    console.print("[dim]Trying local recorded candles first, then Dhan Data API fallback...[/dim]\n")
 
     all_results: list[BtResult] = []
     dhan_client = None
 
-    for index, ticker in INDEX_TICKERS.items():
-        console.print(f"[yellow]▶ {index}  ({ticker})[/yellow]")
+    for index in indices:
+        console.print(f"[yellow]▶ {index}[/yellow]")
 
         df = load_recorded_ohlcv(index=index, days=days)
         option_df = load_recorded_atm_options(index=index, days=days)
@@ -715,12 +808,10 @@ def run_backtest(days: int = 5):
             logger.info(f"Using recorded local data for {index}: {len(df)} candles")
             if option_df is not None and not option_df.empty:
                 logger.info(f"Using recorded ATM option premiums for {index}: {len(option_df)} rows")
-        else:
-            df = _fetch_yfinance(ticker, period=period, interval="1m")
         if df is None or df.empty:
             df = _fetch_dhan(dhan_client, index, days)
         if df is None or df.empty:
-            logger.warning(f"No data for {index} ({ticker}) — skipping")
+            logger.warning(f"No data for {index} — skipping")
             continue
 
         # Simple strategies (stateless)
@@ -764,6 +855,13 @@ def run_backtest(days: int = 5):
     # HTML report
     html_path = _generate_html_report(all_results, days)
     console.print(f"\n[bold green]📄 Full report → {html_path}[/bold green]")
+
+    # CSV exports
+    summary_csv_path, trades_csv_path = _export_csv_results(all_results, days)
+    if summary_csv_path:
+        console.print(f"[bold green]🧾 CSV summary → {summary_csv_path}[/bold green]")
+    if trades_csv_path:
+        console.print(f"[bold green]🧾 CSV trades → {trades_csv_path}[/bold green]")
 
     # JSON export
     json_path = Path(LOG_DIR) / "backtest_results.json"
