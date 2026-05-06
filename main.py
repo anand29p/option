@@ -8,11 +8,12 @@
 #   python main.py --report         # print today's report and exit
 #   python main.py --weekly         # print weekly report and exit
 #   python main.py --backtest       # run backtest on historical data
-#   python main.py --dashboard      # start web dashboard only
+#   python main.py --dashboard      # start Streamlit dashboard only (port 8501)
 # ─────────────────────────────────────────────────────────────────────────────
 
 import sys
 import threading
+import subprocess
 import click
 from datetime import datetime
 from pathlib import Path
@@ -248,9 +249,25 @@ def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: 
         sys.exit(0)
 
     if dashboard:
-        console.print("[bold cyan]📊 Starting dashboard at http://127.0.0.1:5000[/bold cyan]")
-        from dashboard.app import start_dashboard
-        start_dashboard(bot=None)
+        console.print("[bold cyan]📊 Starting Streamlit dashboard at http://127.0.0.1:8501[/bold cyan]")
+        streamlit_cmd = [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            "streamlit_app.py",
+            "--server.address",
+            "127.0.0.1",
+            "--server.port",
+            "8501",
+            "--server.headless",
+            "true",
+        ]
+        try:
+            subprocess.run(streamlit_cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to start Streamlit dashboard: {e}")
+            sys.exit(1)
         sys.exit(0)
 
     if not is_trading_day():
