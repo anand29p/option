@@ -354,8 +354,10 @@ class AlgoBot:
 @click.option("--backtest",  is_flag=True, help="Run backtest simulation and exit")
 @click.option("--backtest-pairs", type=int, default=0, 
               help="Backtest strategy pair combinations (2 or 3) and exit. Requires number of signals.")
+@click.option("--symbol",    type=str, default="BANKNIFTY",
+              help="Symbol for backtesting (default: BANKNIFTY). Can be index or stock.")
 @click.option("--dashboard", is_flag=True, help="Start web dashboard only (no trading)")
-def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: int, dashboard: bool):
+def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: int, symbol: str, dashboard: bool):
     """
     🤖  Nifty Options Algo Trader
 
@@ -389,7 +391,7 @@ def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: 
         if backtest_pairs not in (2, 3):
             console.print("[red]❌ --backtest-pairs requires 2 or 3[/red]")
             sys.exit(1)
-        run_backtest_pairs(days=100, signal_count=backtest_pairs)
+        run_backtest_pairs(days=100, signal_count=backtest_pairs, symbol=symbol)
         sys.exit(0)
 
     if dashboard:

@@ -1287,12 +1287,17 @@ def _backtest_multi_strategy_consensus(
     return result
 
 
-def run_backtest_pairs(days: int = 100, signal_count: int = 2):
+def run_backtest_pairs(days: int = 100, signal_count: int = 2, symbol: str = "BANKNIFTY"):
     """
     Backtest all combinations of strategy pairs (2-signal or 3-signal consensus).
     Requires ALL strategies in the combo to agree on direction.
+    
+    Args:
+        days: Number of days of historical data to backtest
+        signal_count: 2 for pairs, 3 for triplets
+        symbol: Trading symbol - can be index (NIFTY, BANKNIFTY, FINNIFTY) or stock (TCS, INFY, etc.)
     """
-    # Profitable BANKNIFTY strategies from recent backtest
+    # Profitable strategies
     base_strategies = [
         "RSIDivergence",
         "VWAPReversion",
@@ -1306,11 +1311,11 @@ def run_backtest_pairs(days: int = 100, signal_count: int = 2):
     combos: list[tuple[str, ...]] = list(combinations(base_strategies, signal_count))
 
     console.print(
-        f"\n[bold cyan]🔬 Running {signal_count}-signal combo backtests — last {days} days[/bold cyan]"
+        f"\n[bold cyan]🔬 Running {signal_count}-signal combo backtests — last {days} days on {symbol}[/bold cyan]"
     )
-    console.print(f"[dim]Testing {len(combos)} combinations on BANKNIFTY...[/dim]\n")
+    console.print(f"[dim]Testing {len(combos)} combinations...[/dim]\n")
 
-    index = "BANKNIFTY"
+    index = symbol  # Use provided symbol (works for both indices and stocks)
     df = load_recorded_ohlcv(index=index, days=days)
     option_df = load_recorded_atm_options(index=index, days=days)
 
