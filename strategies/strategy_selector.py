@@ -33,6 +33,7 @@ from strategies.supertrend_momentum import SuperTrendMomentumStrategy
 from strategies.ema_crossover       import EMACrossoverStrategy
 from strategies.gap_and_go          import GapAndGoStrategy
 from strategies.rsi_divergence      import RSIDivergenceStrategy
+from strategies.opening_drive       import OpeningDriveStrategy
 
 import pandas_ta as ta
 
@@ -72,6 +73,7 @@ class StrategySelector:
         self.ema_cross  = EMACrossoverStrategy(kite, paper_engine)
         self.gap        = GapAndGoStrategy(kite, paper_engine)
         self.rsi_div    = RSIDivergenceStrategy(kite, paper_engine)
+        self.opening    = OpeningDriveStrategy(kite, paper_engine)
 
         # Adaptive performance scores (start neutral at 1.0)
         self._scores: dict[str, float] = defaultdict(lambda: 1.0)
@@ -218,6 +220,7 @@ class StrategySelector:
             (self.rsi_div,    "5min"),
             (self.supertrend, "5min"),
             (self.ema_cross,  "3min"),
+            (self.opening,    "5min"),
         ]
         seen = set()
         unique = []

@@ -29,17 +29,17 @@ from config.settings import IST
 
 # ── RSS Feeds (free, no auth) ────────────────────────────────────────────────
 RSS_FEEDS = {
-    "ET Markets":         "https://economictimes.indiatimes.com/markets/rss.cms",
+    "ET":                 "https://economictimes.indiatimes.com/markets/rss.cms",
     "Moneycontrol":       "https://www.moneycontrol.com/rss/marketreports.xml",
     "Business Standard":  "https://www.business-standard.com/rss/markets-106.rss",
-    "NSE India":          "https://www.nseindia.com/api/rss",
+    "NSE":                "https://www.nseindia.com/api/rss",
 }
 
 SOURCE_WEIGHTS = {
-    "ET Markets": 1.0,
+    "ET": 1.0,
     "Moneycontrol": 1.1,
     "Business Standard": 0.95,
-    "NSE India": 1.15,
+    "NSE": 1.15,
 }
 
 # ── Financial keyword sentiment boosters ─────────────────────────────────────
@@ -84,8 +84,10 @@ class SentimentScore:
     top_headlines: list       = field(default_factory=list)   # Top 5 headlines
     event_score: float        = 0.0
     event_bias:  str          = "NEUTRAL"
+    event_type:  str          = "OTHER"
     event_count: int          = 0
     active_events: list       = field(default_factory=list)
+    headline_sources: dict    = field(default_factory=dict)   # {source_name: count}
 
     def to_dict(self) -> dict:
         return {
@@ -97,8 +99,10 @@ class SentimentScore:
             "top_headlines":  self.top_headlines[:5],
             "event_score":    round(self.event_score, 3),
             "event_bias":     self.event_bias,
+            "event_type":     self.event_type,
             "event_count":    self.event_count,
             "active_events":  self.active_events[:8],
+            "headline_sources": self.headline_sources,
         }
 
 
@@ -164,8 +168,10 @@ class NewsSentimentAnalyzer:
         weighted_scores = []
         event_scores = []
         active_events: dict[str, int] = {}
+        headline_sources: dict[str, int] = {}
         top_hl     = []
         seen_today = set()
+        event_type = "OTHER"
 
         for item in headlines:
             hl = item["headline"]
@@ -175,6 +181,9 @@ class NewsSentimentAnalyzer:
             if h in seen_today:
                 continue
             seen_today.add(h)
+
+            # Track headline sources
+            headline_sources[source] = headline_sources.get(source, 0) + 1
 
             vader_raw = self._vader.polarity_scores(hl)["compound"]
             boost     = self._keyword_boost(hl)
@@ -206,6 +215,19 @@ class NewsSentimentAnalyzer:
         event_avg = sum(event_scores) / max(1, len(event_scores))
         event_bias = "BULLISH" if event_avg > 0.05 else ("BEARISH" if event_avg < -0.05 else "NEUTRAL")
 
+        # Determine event type from dominant active events
+        if active_events:
+            top_event = max(active_events.items(), key=lambda x: x[1])[0]
+            lower_event = top_event.lower()
+            if any(kw in lower_event for kw in ["earnings", "results", "ipo"]):
+                event_type = "EARNINGS"
+            elif any(kw in lower_event for kw in ["policy", "rbi", "rate", "inflation"]):
+                event_type = "POLICY"
+            elif any(kw in lower_event for kw in ["indices", "nifty", "sensex", "index"]):
+                event_type = "INDICES"
+            else:
+                event_type = "OTHER"
+
         # Sort top headlines by absolute score
         top_hl.sort(key=lambda x: abs(x["score"]) + abs(x.get("event_score", 0.0)), reverse=True)
 
@@ -217,8 +239,10 @@ class NewsSentimentAnalyzer:
             top_headlines=top_hl[:5],
             event_score=round(event_avg, 3),
             event_bias=event_bias,
+            event_type=event_type,
             event_count=sum(active_events.values()),
             active_events=[name for name, _ in sorted(active_events.items(), key=lambda item: item[1], reverse=True)],
+            headline_sources=headline_sources,
         )
 
     def _fetch_headlines(self) -> list[dict]:

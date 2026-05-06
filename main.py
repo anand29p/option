@@ -207,8 +207,10 @@ class AlgoBot:
 @click.option("--report",    is_flag=True, help="Print today's P&L report and exit")
 @click.option("--weekly",    is_flag=True, help="Print weekly P&L report and exit")
 @click.option("--backtest",  is_flag=True, help="Run backtest simulation and exit")
+@click.option("--backtest-pairs", type=int, default=0, 
+              help="Backtest strategy pair combinations (2 or 3) and exit. Requires number of signals.")
 @click.option("--dashboard", is_flag=True, help="Start web dashboard only (no trading)")
-def main(mode: str, report: bool, weekly: bool, backtest: bool, dashboard: bool):
+def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: int, dashboard: bool):
     """
     🤖  Nifty Options Algo Trader
 
@@ -235,6 +237,14 @@ def main(mode: str, report: bool, weekly: bool, backtest: bool, dashboard: bool)
     if backtest:
         from utils.backtester import run_backtest
         run_backtest()
+        sys.exit(0)
+
+    if backtest_pairs > 0:
+        from utils.backtester import run_backtest_pairs
+        if backtest_pairs not in (2, 3):
+            console.print("[red]❌ --backtest-pairs requires 2 or 3[/red]")
+            sys.exit(1)
+        run_backtest_pairs(days=100, signal_count=backtest_pairs)
         sys.exit(0)
 
     if dashboard:

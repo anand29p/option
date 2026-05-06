@@ -1111,6 +1111,270 @@ def run_backtest(days: int = 5):
     logger.info(f"JSON results → {json_path}")
 
 
+def _backtest_multi_strategy_consensus(
+    strategy_names: list[str],
+    index: str,
+    df: pd.DataFrame,
+    option_df: Optional[pd.DataFrame] = None,
+    combo_name: str = "",
+) -> BtResult:
+    """
+    Backtest a combination of strategies where ALL must agree on direction.
+    Takes only trades where all strategies in the combo signal in the same direction.
+    """
+    result = BtResult(strategy=combo_name or f"Combo({','.join(strategy_names)})", index=index)
+    open_trade: Optional[BtTrade] = None
+    
+    # Map strategy names to signal functions
+    strategy_map = {
+        "ScalpMomentum":     _signal_scalp,
+        "MeanReversion":     _signal_mr,
+        "VWAPReversion":     _signal_vwap_rev,
+        "RSIDivergence":     _signal_rsi_div,
+        "TrendRider":        _signal_trend_rider,
+        "VWAPReclaim":       _signal_vwap_reclaim,
+        "OpeningDrive":      _signal_opening_drive,
+        "BollingerReversal": _signal_bb_reversal,
+    }
+    
+    strategy_state = {
+        "ORBBreakout": {"set": False, "high": 0.0, "low": 0.0},
+        "SuperTrendMomentum": {"st_dir": 0},
+        "EMACrossover": {"n": 0, "last_cross": 0},
+    }
+
+    for i in range(1, len(df)):
+        bar = df.iloc[i]
+        ts = df.index[i]
+
+        # Reset ORB at day start
+        if i % 375 == 374:
+            strategy_state["ORBBreakout"] = {"set": False, "high": 0.0, "low": 0.0}
+
+        # Handle open trade
+        if open_trade:
+            prem = _lookup_recorded_option_price(
+                option_df=option_df,
+                ts=ts,
+                option_type=open_trade.option_type,
+                spot_price=float(bar["close"]),
+            )
+            if prem is None:
+                prem = _mark_premium(open_trade, bar["close"])
+
+            # Exit if premium drops to 10% of entry or rises 3x
+            if prem <= open_trade.entry_price * 0.10 or prem >= open_trade.entry_price * 3.0:
+                pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
+                open_trade.exit_bar = i
+                open_trade.exit_price = prem
+                open_trade.exit_reason = "hit_limit"
+                open_trade.net_pnl = pnl_obj.charge_breakdown["net_pnl"]
+                open_trade.charges = pnl_obj.charge_breakdown["total_charges"]
+                result.trades.append(open_trade)
+                open_trade = None
+            # Exit at EOD (bar 375)
+            elif i % 375 == 374:
+                pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
+                open_trade.exit_bar = i
+                open_trade.exit_price = prem
+                open_trade.exit_reason = "eod"
+                open_trade.net_pnl = pnl_obj.charge_breakdown["net_pnl"]
+                open_trade.charges = pnl_obj.charge_breakdown["total_charges"]
+                result.trades.append(open_trade)
+                open_trade = None
+            continue
+
+        # Collect signals from all strategies
+        signals = {}
+        for strat_name in strategy_names:
+            sig = "NONE"
+            try:
+                if strat_name in ("ORBBreakout",):
+                    sig = _signal_orb(df, i, strategy_state[strat_name])
+                elif strat_name == "SuperTrendMomentum":
+                    sig = _signal_supertrend(df, i, strategy_state[strat_name])
+                elif strat_name == "EMACrossover":
+                    sig = _signal_ema_cross(df, i, strategy_state[strat_name])
+                elif strat_name in strategy_map:
+                    sig = strategy_map[strat_name](df, i)
+            except Exception:
+                pass
+            signals[strat_name] = sig
+
+        # Check if all strategies agree
+        valid_signals = [s for s in signals.values() if s != "NONE"]
+        if len(valid_signals) < len(strategy_names):
+            continue
+        
+        # All strategies must agree on direction
+        first_signal = valid_signals[0]
+        if not all(s == first_signal for s in valid_signals):
+            continue
+
+        # Open trade
+        sig = first_signal
+        entry_spot = bar["close"]
+        option_type = "CE" if sig == "BUY_CE" else "PE"
+        
+        entry_prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=ts,
+            option_type=option_type,
+            spot_price=float(entry_spot),
+        )
+        if entry_prem is None:
+            entry_prem = _simulate_premium(entry_spot, index, option_type)
+        if entry_prem <= 0:
+            continue
+
+        open_trade = BtTrade(
+            strategy    = result.strategy,
+            index       = index,
+            option_type = option_type,
+            entry_bar   = i,
+            entry_spot  = entry_spot,
+            entry_price = entry_prem,
+            quantity    = LOT_SIZE,
+            signal_sources = ",".join(strategy_names),
+        )
+
+    # Close any remaining open trade
+    if open_trade:
+        bar = df.iloc[-1]
+        prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=df.index[-1],
+            option_type=open_trade.option_type,
+            spot_price=float(bar["close"]),
+        )
+        if prem is None:
+            prem = _mark_premium(open_trade, bar["close"])
+        pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
+        open_trade.exit_bar = len(df) - 1
+        open_trade.exit_price = prem
+        open_trade.exit_reason = "final_bar"
+        open_trade.net_pnl = pnl_obj.charge_breakdown["net_pnl"]
+        open_trade.charges = pnl_obj.charge_breakdown["total_charges"]
+        result.trades.append(open_trade)
+
+    # Aggregate results
+    wins   = [t for t in result.trades if t.net_pnl >= 0]
+    losses = [t for t in result.trades if t.net_pnl <  0]
+
+    result.total_trades  = len(result.trades)
+    result.winners       = len(wins)
+    result.losers        = len(losses)
+    result.gross_pnl     = sum((t.exit_price - t.entry_price) * t.quantity for t in result.trades)
+    result.total_charges = sum(t.charges for t in result.trades)
+    result.net_pnl       = sum(t.net_pnl for t in result.trades)
+    result.win_rate      = round(len(wins) / max(1, result.total_trades) * 100, 1)
+    result.avg_win       = round(sum(t.net_pnl for t in wins)   / max(1, len(wins)),   2)
+    result.avg_loss      = round(sum(t.net_pnl for t in losses) / max(1, len(losses)), 2)
+    gross_wins  = sum(t.net_pnl for t in wins)
+    gross_losses = abs(sum(t.net_pnl for t in losses))
+    result.profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else 0.0
+
+    # Max drawdown
+    equity = 0.0
+    peak   = 0.0
+    dd     = 0.0
+    for t in result.trades:
+        equity += t.net_pnl
+        peak    = max(peak, equity)
+        dd      = max(dd, peak - equity)
+    result.max_drawdown = round(dd, 2)
+
+    return result
+
+
+def run_backtest_pairs(days: int = 100, signal_count: int = 2):
+    """
+    Backtest all combinations of strategy pairs (2-signal or 3-signal consensus).
+    Requires ALL strategies in the combo to agree on direction.
+    """
+    # Profitable BANKNIFTY strategies from recent backtest
+    base_strategies = [
+        "RSIDivergence",
+        "VWAPReversion",
+        "ORBBreakout",
+        "MeanReversion",
+    ]
+
+    # Generate all combinations
+    from itertools import combinations
+
+    combos: list[tuple[str, ...]] = list(combinations(base_strategies, signal_count))
+
+    console.print(
+        f"\n[bold cyan]🔬 Running {signal_count}-signal combo backtests — last {days} days[/bold cyan]"
+    )
+    console.print(f"[dim]Testing {len(combos)} combinations on BANKNIFTY...[/dim]\n")
+
+    index = "BANKNIFTY"
+    df = load_recorded_ohlcv(index=index, days=days)
+    option_df = load_recorded_atm_options(index=index, days=days)
+
+    if df is None or df.empty:
+        df = _fetch_dhan(None, index, days)
+    if df is None or df.empty:
+        logger.error(f"No data for {index}")
+        return
+
+    if option_df is not None and not option_df.empty:
+        logger.info(f"Using recorded ATM premiums: {len(option_df)} rows")
+
+    all_results: list[BtResult] = []
+
+    for combo in combos:
+        combo_name = "+".join(combo)
+        try:
+            result = _backtest_multi_strategy_consensus(
+                strategy_names=list(combo),
+                index=index,
+                df=df,
+                option_df=option_df,
+                combo_name=combo_name,
+            )
+            all_results.append(result)
+            icon = "🟢" if result.net_pnl >= 0 else "🔴"
+            console.print(
+                f"  {icon} {combo_name:40s} | {result.total_trades:3d} trades | "
+                f"WR={result.win_rate:5.1f}% | Net=₹{result.net_pnl:+,.0f}"
+            )
+        except Exception as e:
+            logger.error(f"Backtest failed for {combo_name}: {e}")
+
+    # Export CSV
+    if all_results:
+        stamp = datetime.now(IST).strftime("%Y%m%d")
+        csv_path = Path(LOG_DIR) / f"backtest_strategy_pairs_{signal_count}signal_{days}d_{stamp}.csv"
+        
+        rows = []
+        for r in sorted(all_results, key=lambda x: x.net_pnl, reverse=True):
+            rows.append({
+                "pair_name": r.strategy,
+                "index": r.index,
+                "100_day_net_pnl": round(r.net_pnl, 2),
+                "win_rate": r.win_rate,
+                "trade_count": r.total_trades,
+                "profit_factor": r.profit_factor,
+                "max_drawdown": round(r.max_drawdown, 2),
+                "avg_win": r.avg_win,
+                "avg_loss": r.avg_loss,
+                "total_charges": round(r.total_charges, 2),
+            })
+
+        csv_df = pd.DataFrame(rows)
+        try:
+            csv_df.to_csv(csv_path, index=False)
+            console.print(f"\n[bold green]🧾 {signal_count}-signal results → {csv_path}[/bold green]")
+        except PermissionError:
+            logger.error(f"Cannot write CSV to {csv_path}")
+
+    # Summary table
+    _print_summary(all_results)
+
+
 def _print_summary(results: list[BtResult]):
     table = Table(title="Backtest Summary (Net P&L after all charges)", box=box.ROUNDED)
     table.add_column("Strategy",       style="cyan",  width=22)

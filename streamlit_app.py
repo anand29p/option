@@ -450,7 +450,7 @@ with left:
         st.markdown("</div>", unsafe_allow_html=True)
 
 with right:
-    st.subheader("News Sentiment")
+    st.subheader("News Sentiment & Events")
     if "error" in sent:
         st.error(sent["error"])
     else:
@@ -458,17 +458,53 @@ with right:
         label = str(sent.get("label", "NEUTRAL"))
         color = _sentiment_color(label)
         st.markdown(f"### :{color}[{label}]")
-        st.metric("Score", f"{_safe_float(sent.get('score', 0.0)):+.3f}")
-        st.metric("Confidence", f"{_safe_float(sent.get('confidence', 0.0))*100:.0f}%")
-        event_bias = str(sent.get("event_bias", "NEUTRAL"))
-        st.metric("Event Bias", event_bias)
-        st.caption(f"Headlines analyzed: {sent.get('headline_count', 0)}")
+        
+        # Main metrics
+        m_col1, m_col2, m_col3 = st.columns(3)
+        with m_col1:
+            st.metric("Score", f"{_safe_float(sent.get('score', 0.0)):+.3f}")
+        with m_col2:
+            st.metric("Confidence", f"{_safe_float(sent.get('confidence', 0.0))*100:.0f}%")
+        with m_col3:
+            st.metric("Headlines", sent.get('headline_count', 0))
+        
+        # Event type display
+        event_type = str(sent.get("event_type", "OTHER")).upper()
+        event_tag_class = "tag-good" if event_type in ["EARNINGS", "POSITIVE"] else (
+            "tag-bad" if event_type in ["LOSS", "NEGATIVE"] else "tag-neutral"
+        )
+        st.markdown(
+            f"<span class='tag {event_tag_class}'>Event: {event_type}</span>",
+            unsafe_allow_html=True,
+        )
+        
+        # Active events breakdown
         active_events = sent.get("active_events", [])
         if active_events:
-            st.caption("Event tags: " + ", ".join(str(x) for x in active_events[:5]))
+            st.markdown("<div class='small-note'><b>Active Events</b></div>", unsafe_allow_html=True)
+            event_cols = st.columns(min(3, len(active_events)))
+            for idx, event in enumerate(active_events[:3]):
+                with event_cols[idx % 3]:
+                    st.markdown(f"<div class='tag tag-accent'>{event}</div>", unsafe_allow_html=True)
+        
+        # Sentiment sources breakdown
+        headline_sources = sent.get("headline_sources", {})
+        if headline_sources and isinstance(headline_sources, dict):
+            st.markdown("<div class='small-note'><b>Sentiment Sources</b></div>", unsafe_allow_html=True)
+            total_headlines = sum(headline_sources.values())
+            if total_headlines > 0:
+                source_data = []
+                for source_name in ["Moneycontrol", "ET", "Business Standard", "NSE"]:
+                    count = headline_sources.get(source_name, 0)
+                    pct = round(count / total_headlines * 100, 0) if total_headlines > 0 else 0
+                    source_data.append({"Source": source_name, "Count": count, "Pct": f"{int(pct)}%"})
+                source_df = pd.DataFrame(source_data)
+                st.dataframe(source_df, use_container_width=True, hide_index=True)
+        
+        # Top headlines
         top_headlines = sent.get("top_headlines", [])
         if top_headlines:
-            st.markdown("<div class='small-note'><b>Top headlines</b></div>", unsafe_allow_html=True)
+            st.markdown("<div class='small-note'><b>Top Headlines</b></div>", unsafe_allow_html=True)
             for item in top_headlines:
                 score = _safe_float(item.get("score", 0.0), 0.0)
                 tag_class = "tag-good" if score > 0 else ("tag-bad" if score < 0 else "tag-neutral")
