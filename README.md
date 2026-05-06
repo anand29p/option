@@ -101,9 +101,68 @@ python main.py                  # Paper trade (default)
 python main.py --mode paper     # Explicit paper mode
 python main.py --report         # Print today's P&L report and exit
 python main.py --weekly         # Print weekly summary and exit
-python main.py --backtest       # Run historical backtest simulation
+python main.py --backtest       # Run historical backtest simulation (all strategies)
+python main.py --backtest-pairs 2   # Backtest 2-signal pair combinations (100 days)
+python main.py --backtest-pairs 3   # Backtest 3-signal triplet combinations (100 days)
 python main.py --dashboard      # Start dashboard only (no trading)
 ```
+
+### Pair-Specific Backtest Examples
+
+**Problem**: Single strategy signals too noisy. Solution: Only trade when **multiple strategies agree**.
+
+```bash
+# Test 2-signal combinations (e.g., RSIDivergence + VWAPReversion must both signal)
+python main.py --backtest-pairs 2
+# Output → logs/backtest_strategy_pairs_2signal_100d_YYYYMMDD.csv (.html also generated)
+
+# Test 3-signal triplets (more selective: all 3 must agree)
+python main.py --backtest-pairs 3
+# Output → logs/backtest_strategy_pairs_3signal_100d_YYYYMMDD.csv (.html also generated)
+```
+
+**View Results**:
+- **CSV Format**: Open with Excel/Google Sheets for data analysis
+  ```
+  logs/backtest_strategy_pairs_2signal_100d_YYYYMMDD.csv
+  logs/backtest_strategy_pairs_3signal_100d_YYYYMMDD.csv
+  ```
+
+- **HTML Format** (recommended for visual review): Open in any browser
+  ```
+  logs/backtest_strategy_pairs_2signal_100d_YYYYMMDD.html
+  logs/backtest_strategy_pairs_3signal_100d_YYYYMMDD.html
+  ```
+
+- **Demo Examples** (to see format without running backtest):
+  ```
+  logs/backtest_strategy_pairs_2signal_100d_demo.html  ← 2-signal demo
+  logs/backtest_strategy_pairs_3signal_100d_demo.html  ← 3-signal demo
+  ```
+
+**Pair Combinations Tested** (BANKNIFTY, 100 days):
+
+2-Signal (6 pairs):
+- RSIDivergence + VWAPReversion
+- RSIDivergence + ORBBreakout
+- RSIDivergence + MeanReversion
+- VWAPReversion + ORBBreakout
+- VWAPReversion + MeanReversion
+- ORBBreakout + MeanReversion
+
+3-Signal (4 triplets):
+- RSIDivergence + VWAPReversion + ORBBreakout
+- RSIDivergence + VWAPReversion + MeanReversion
+- RSIDivergence + ORBBreakout + MeanReversion
+- VWAPReversion + ORBBreakout + MeanReversion
+
+**CSV Output Format**:
+```
+pair_name,index,100_day_net_pnl,win_rate,trade_count,profit_factor,max_drawdown,avg_win,avg_loss,total_charges
+RSIDivergence+VWAPReversion,BANKNIFTY,21445.32,64.5,38,1.45,12389.65,1842.15,-1923.44,2156.89
+```
+
+See [IMPLEMENTATION.md](./IMPLEMENTATION.md) for detailed strategy logic.
 
 ---
 

@@ -1371,8 +1371,114 @@ def run_backtest_pairs(days: int = 100, signal_count: int = 2):
         except PermissionError:
             logger.error(f"Cannot write CSV to {csv_path}")
 
+        # Generate HTML report
+        html_path = _generate_html_report_pairs(all_results, signal_count, days)
+        if html_path:
+            console.print(f"[bold green]📄 HTML report → {html_path}[/bold green]")
+
     # Summary table
     _print_summary(all_results)
+
+
+def _generate_html_report_pairs(results: list[BtResult], signal_count: int, days: int) -> Optional[str]:
+    """Generate an HTML report for pair-specific backtests."""
+    if not results:
+        return None
+
+    stamp = datetime.now(IST).strftime("%Y%m%d")
+    html_path = Path(LOG_DIR) / f"backtest_strategy_pairs_{signal_count}signal_{days}d_{stamp}.html"
+
+    sorted_results = sorted(results, key=lambda x: x.net_pnl, reverse=True)
+
+    html_rows = ""
+    for r in sorted_results:
+        color = "color:#2ecc71" if r.net_pnl >= 0 else "color:#e74c3c"
+        html_rows += f"""
+        <tr>
+          <td>{r.strategy}</td>
+          <td>{r.index}</td>
+          <td>{r.total_trades}</td>
+          <td>{r.win_rate}%</td>
+          <td>₹{r.gross_pnl:,.2f}</td>
+          <td>₹{r.total_charges:,.2f}</td>
+          <td style="{color};font-weight:bold">₹{r.net_pnl:+,.2f}</td>
+          <td>₹{r.max_drawdown:,.2f}</td>
+          <td>{r.profit_factor}</td>
+          <td>₹{r.avg_win:,.2f}</td>
+          <td>₹{r.avg_loss:,.2f}</td>
+        </tr>
+"""
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Strategy Pair Backtest Report</title>
+<style>
+  body {{ font-family: 'Segoe UI', sans-serif; background:#0f1117; color:#e0e0e0; padding:24px; }}
+  h1   {{ color:#00d4aa; }}
+  h2   {{ color:#7f8c8d; font-size:14px; margin-top:-10px; }}
+  h3   {{ color:#00d4aa; margin-top:24px; }}
+  table {{ border-collapse:collapse; width:100%; margin-top:20px; font-size:13px; }}
+  th   {{ background:#1e2130; color:#00d4aa; padding:10px 14px; text-align:left; }}
+  td   {{ padding:8px 14px; border-bottom:1px solid #222; }}
+  tr:hover td {{ background:#1a1f2e; }}
+  .badge {{ display:inline-block; padding:3px 8px; border-radius:4px;
+            background:#00d4aa22; color:#00d4aa; font-size:12px; margin:2px; }}
+  .positive {{ color:#2ecc71; font-weight:bold; }}
+  .negative {{ color:#e74c3c; font-weight:bold; }}
+</style>
+</head>
+<body>
+<h1>📊 {signal_count}-Signal Strategy Pair Backtest Report</h1>
+<h2>Period: Last {days} trading days | Index: BANKNIFTY | All P&amp;L after charges</h2>
+
+<p>
+  <span class="badge">Combinations: {len(sorted_results)}</span>
+  <span class="badge">Signal Count: {signal_count}+</span>
+  <span class="badge">Entry Condition: ALL strategies must agree</span>
+  <span class="badge">Charges: STT + Brokerage + GST + Stamp Duty</span>
+</p>
+
+<h3>📈 Pair Rankings (sorted by Net P&amp;L)</h3>
+<table>
+<thead>
+  <tr>
+    <th>Pair Name</th><th>Index</th><th>Trades</th><th>Win Rate</th>
+    <th>Gross P&amp;L</th><th>Charges</th><th>Net P&amp;L</th>
+    <th>Max DD</th><th>Profit Factor</th><th>Avg Win</th><th>Avg Loss</th>
+  </tr>
+</thead>
+<tbody>
+{html_rows}
+</tbody>
+</table>
+
+<h3>📊 Interpretation Guide</h3>
+<ul>
+  <li><strong>Pair Name</strong>: Strategy combination (e.g., RSI + VWAP means both must signal same direction)</li>
+  <li><strong>Trades</strong>: Number of opportunities where ALL strategies agreed</li>
+  <li><strong>Win Rate</strong>: % of trades that were profitable</li>
+  <li><strong>Net P&amp;L</strong>: Profit after all exchange/brokerage charges</li>
+  <li><strong>Max DD</strong>: Largest peak-to-trough equity decline</li>
+  <li><strong>Profit Factor</strong>: Gross wins / Gross losses (higher is better)</li>
+</ul>
+
+<p style="margin-top:32px; font-size:12px; color:#888;">
+  Generated at {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')} | 
+  Report: backtest_strategy_pairs_{signal_count}signal_{days}d_{stamp}.html
+</p>
+
+</body>
+</html>
+"""
+
+    try:
+        html_path.write_text(html_content)
+        return str(html_path)
+    except Exception as e:
+        logger.error(f"Failed to write HTML report: {e}")
+        return None
 
 
 def _print_summary(results: list[BtResult]):
