@@ -132,3 +132,5 @@ ACTIVE_STRATEGY_ALLOWLIST = {
 }
 SHADOW_SIGNAL_LOG = os.getenv("SHADOW_SIGNAL_LOG", "true").lower() in ("1", "true", "yes", "on")
 SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", f"{LOG_DIR}/shadow_signals.csv")
+SIGNAL_CONSENSUS_ENABLED = os.getenv("SIGNAL_CONSENSUS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+MIN_SIGNAL_CONSENSUS = max(1, int(os.getenv("MIN_SIGNAL_CONSENSUS", "2")))

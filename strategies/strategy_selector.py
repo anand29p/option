@@ -21,6 +21,7 @@ from loguru import logger
 from config.settings import (
     VIX_HIGH, VIX_MEDIUM, IST, INDICES,
     ACTIVE_STRATEGY_ALLOWLIST, SHADOW_SIGNAL_LOG,
+    SIGNAL_CONSENSUS_ENABLED, MIN_SIGNAL_CONSENSUS,
 )
 from utils.shadow_journal import ShadowSignalJournal
 
@@ -85,6 +86,9 @@ class StrategySelector:
         logger.info(
             "Active strategy allowlist: "
             + ", ".join(f"{idx}:{name}" for idx, name in sorted(ACTIVE_STRATEGY_ALLOWLIST))
+        )
+        logger.info(
+            f"Signal consensus: enabled={SIGNAL_CONSENSUS_ENABLED} min_count={MIN_SIGNAL_CONSENSUS}"
         )
 
     # ── Day Reset ─────────────────────────────────────────────────────────────
@@ -256,6 +260,38 @@ class StrategySelector:
             reason=reason,
         )
 
+    def _pick_consensus_candidate(self, candidates: list[dict], priority_order: dict[str, int]) -> tuple[dict | None, str]:
+        """Pick the highest-priority candidate that meets signal consensus rules."""
+        if not candidates:
+            return None, "no_active_candidates"
+
+        if not SIGNAL_CONSENSUS_ENABLED:
+            chosen = min(candidates, key=lambda item: priority_order.get(item["strategy_name"], 999))
+            return chosen, "consensus_disabled"
+
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for item in candidates:
+            grouped[item["signal"]].append(item)
+
+        qualifying = [
+            (signal, rows)
+            for signal, rows in grouped.items()
+            if len(rows) >= MIN_SIGNAL_CONSENSUS
+        ]
+        if not qualifying:
+            return None, "no_consensus"
+
+        signal, rows = max(
+            qualifying,
+            key=lambda item: (
+                len(item[1]),
+                -min(priority_order.get(row["strategy_name"], 999) for row in item[1]),
+            ),
+        )
+        chosen = min(rows, key=lambda item: priority_order.get(item["strategy_name"], 999))
+        chosen = {**chosen, "consensus_signal": signal, "consensus_count": len(rows)}
+        return chosen, "consensus_met"
+
     # ── Main Cycle ────────────────────────────────────────────────────────────
 
     def run_cycle(
@@ -290,9 +326,12 @@ class StrategySelector:
         self.orb.update_orb(index, df_1min)
 
         priority = self._get_priority_list(regime, session)
+        full_list = self._full_strategy_list(priority)
+        priority_order = {strat.NAME: idx for idx, (strat, _) in enumerate(full_list)}
         df_map   = {"1min": df_1min, "3min": df_3min, "5min": df_5min}
+        active_candidates: list[dict] = []
 
-        for strat, df_key in self._full_strategy_list(priority):
+        for strat, df_key in full_list:
             df = df_map.get(df_key, df_1min)
 
             try:
@@ -336,30 +375,61 @@ class StrategySelector:
                 self._last_signal[f"{index}:{strat.NAME}"] = signal
                 continue
 
-            logger.info(
-                f"🎯 [{index}] {strat.NAME} → {signal} | "
-                f"Session={session} Regime={regime} VIX={vix:.1f}"
+            active_candidates.append(
+                {
+                    "strategy": strat,
+                    "strategy_name": strat.NAME,
+                    "signal": signal,
+                }
             )
 
-            try:
-                strat.execute(index, signal, spot_price)
-                self._last_signal[f"{index}:{strat.NAME}"] = signal
-                self._record_shadow(
-                    index=index,
-                    strategy_name=strat.NAME,
-                    signal=signal,
-                    spot_price=spot_price,
-                    session=session,
-                    regime=regime,
-                    trend=trend,
-                    vix=vix,
-                    action="executed",
-                    reason="active_allowlist",
+        chosen, reason = self._pick_consensus_candidate(active_candidates, priority_order)
+        if chosen is None:
+            if active_candidates and reason == "no_consensus":
+                details = ", ".join(
+                    f"{item['strategy_name']}={item['signal']}" for item in active_candidates
                 )
-            except Exception as e:
-                logger.error(f"[{index}] {strat.NAME} execute error: {e}")
+                logger.info(f"[{index}] Consensus blocked trade: {details}")
+                for item in active_candidates:
+                    self._record_shadow(
+                        index=index,
+                        strategy_name=item["strategy_name"],
+                        signal=item["signal"],
+                        spot_price=spot_price,
+                        session=session,
+                        regime=regime,
+                        trend=trend,
+                        vix=vix,
+                        action="blocked",
+                        reason="no_consensus",
+                    )
+            return
 
-            break   # Only one strategy fires per cycle per index
+        strat = chosen["strategy"]
+        signal = chosen["signal"]
+        consensus_count = chosen.get("consensus_count", 1)
+        logger.info(
+            f"🎯 [{index}] {strat.NAME} → {signal} | "
+            f"Session={session} Regime={regime} VIX={vix:.1f} Consensus={consensus_count}"
+        )
+
+        try:
+            strat.execute(index, signal, spot_price)
+            self._last_signal[f"{index}:{strat.NAME}"] = signal
+            self._record_shadow(
+                index=index,
+                strategy_name=strat.NAME,
+                signal=signal,
+                spot_price=spot_price,
+                session=session,
+                regime=regime,
+                trend=trend,
+                vix=vix,
+                action="executed",
+                reason=f"{reason}:{consensus_count}",
+            )
+        except Exception as e:
+            logger.error(f"[{index}] {strat.NAME} execute error: {e}")
 
     # ── Adaptive Score Update ─────────────────────────────────────────────────
 
