@@ -41,12 +41,38 @@ assert MODE in ("paper", "live"), "MODE must be 'paper' or 'live'"
 DHAN_CLIENT_ID    = os.getenv("DHAN_CLIENT_ID",    "")
 DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 
-# Dhan security IDs for NSE indices (stable integer identifiers)
+# Dhan security IDs (stable integer identifiers)
+# Indices: hardcoded per Dhan docs
+# Stocks: typically NSE:SYMBOL maps to unique integer; user can override in .env
 INDEX_SECURITY_IDS = {
+    # Indices (exchange segment: IDX_I)
     "NIFTY":     "13",
     "BANKNIFTY": "25",
     "FINNIFTY":  "27",
 }
+
+STOCK_SECURITY_IDS = {
+    # NSE equities (exchange segment: NSE_EQ for spot, NSE_FNO for options)
+    # These are approximate; will be overridden if Dhan API returns different values
+    "TCS":       "2885",
+    "INFY":      "356",
+    "HDFC":      "13815",
+    "HDFC BANK": "13781",
+    "AXIS BANK": "13780",
+    "ICICI BANK": "13785",
+    "RELIANCE":  "13787",
+    "HUL":       "13789",
+    "LT":        "13814",
+    "ITC":       "13793",
+    "MARUTI":    "13818",
+    "BAJAJ AUTO": "13747",
+    "BHARTI AIRTEL": "13744",
+    "WIPRO":     "13817",
+    "COAL INDIA": "13759",
+}
+
+# Merge for lookups (prefer stock IDs, fallback to index IDs)
+SECURITY_IDS = {**STOCK_SECURITY_IDS, **INDEX_SECURITY_IDS}
 
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 PAPER_CAPITAL           = float(os.getenv("PAPER_CAPITAL", "100000"))   # ₹ Total virtual capital
@@ -59,24 +85,96 @@ MAX_DAILY_LOSS          = 2_000.0   # ₹ Bot stops trading for the day
 SQUAREOFF_TIME          = (15, 15)   # (hour, minute) IST — force exit
 
 # ── Instruments ───────────────────────────────────────────────────────────────
+# Includes both index options (VIX-aware) and equity options (top liquid stocks)
 INDICES = {
+    # Index options (highest liquidity + VIX integration)
     "NIFTY": {
         "symbol":       "NSE:NIFTY 50",
         "fut_symbol":   "NFO:NIFTY",
         "lot_size":     25,
         "strike_step":  50,
+        "type":         "index",
     },
     "BANKNIFTY": {
         "symbol":       "NSE:NIFTY BANK",
         "fut_symbol":   "NFO:BANKNIFTY",
         "lot_size":     15,
         "strike_step":  100,
+        "type":         "index",
     },
     "FINNIFTY": {
         "symbol":       "NSE:NIFTY FIN SERVICE",
         "fut_symbol":   "NFO:FINNIFTY",
         "lot_size":     25,
         "strike_step":  50,
+        "type":         "index",
+    },
+    # Top liquid equity options (NSE)
+    "TCS": {
+        "symbol":       "NSE:TCS",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "INFY": {
+        "symbol":       "NSE:INFY",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "HDFC BANK": {
+        "symbol":       "NSE:HDFCBANK",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "AXIS BANK": {
+        "symbol":       "NSE:AXISBANK",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "ICICI BANK": {
+        "symbol":       "NSE:ICICIBANK",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "RELIANCE": {
+        "symbol":       "NSE:RELIANCE",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "HUL": {
+        "symbol":       "NSE:HUL",
+        "lot_size":     1,
+        "strike_step":  2,
+        "type":         "stock",
+    },
+    "LT": {
+        "symbol":       "NSE:LT",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "ITC": {
+        "symbol":       "NSE:ITC",
+        "lot_size":     1,
+        "strike_step":  2,
+        "type":         "stock",
+    },
+    "MARUTI": {
+        "symbol":       "NSE:MARUTI",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
+    },
+    "BAJAJ AUTO": {
+        "symbol":       "NSE:BAJAJAUT",
+        "lot_size":     1,
+        "strike_step":  5,
+        "type":         "stock",
     },
 }
 
@@ -121,6 +219,7 @@ TAX = {
 LOG_DIR     = "logs"
 LOG_LEVEL   = "DEBUG"
 TRADE_LOG   = f"{LOG_DIR}/trades.csv"
+RUNTIME_STATUS_FILE = os.getenv("RUNTIME_STATUS_FILE", f"{LOG_DIR}/runtime_status.json")
 
 # Strategy execution controls.
 # Format: INDEX:StrategyName,INDEX:StrategyName
@@ -137,3 +236,4 @@ SHADOW_SIGNAL_LOG = os.getenv("SHADOW_SIGNAL_LOG", "true").lower() in ("1", "tru
 SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", f"{LOG_DIR}/shadow_signals.csv")
 SIGNAL_CONSENSUS_ENABLED = os.getenv("SIGNAL_CONSENSUS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 MIN_SIGNAL_CONSENSUS = max(1, int(os.getenv("MIN_SIGNAL_CONSENSUS", "2")))
+FALLBACK_VIX = float(os.getenv("FALLBACK_VIX", "15.0"))

@@ -14,12 +14,21 @@
 import sys
 import threading
 import subprocess
+import os
+import json
 import click
 from datetime import datetime
 from pathlib import Path
 from rich.console import Console
 
-from config.settings import INDICES, IST, LOG_DIR, INDEX_SECURITY_IDS
+from config.settings import (
+    INDICES,
+    IST,
+    LOG_DIR,
+    INDEX_SECURITY_IDS,
+    FALLBACK_VIX,
+    RUNTIME_STATUS_FILE,
+)
 from config.logging_config import setup_logging
 from utils.dhan_client import DhanClient
 from utils.paper_engine import PaperEngine
@@ -56,6 +65,12 @@ class AlgoBot:
         self.selector = StrategySelector(self.dhan, self.engine, self.risk)
         self.recorder = MarketDataRecorder()
         self._cycle_count = 0
+        self._last_good_vix: float | None = None
+        self._last_good_vix_at: datetime | None = None
+        self._last_vix_source = "unknown"
+        self._last_spot: dict[str, float] = {}
+        self._last_spot_at: dict[str, datetime] = {}
+        self._heartbeat_path = Path(RUNTIME_STATUS_FILE)
 
     # ── Scheduler-called methods ──────────────────────────────────────────────
 
@@ -85,15 +100,27 @@ class AlgoBot:
     def run_cycle(self):
         """Main strategy cycle — called every minute by scheduler."""
         self._cycle_count += 1
+        cycle_started_at = datetime.now(IST)
+        cycle_report: dict[str, dict[str, object]] = {}
 
         # Connectivity health check every 10 cycles
         if self._cycle_count % 10 == 0:
             if not self._health_check():
+                self._write_runtime_status(
+                    cycle_started_at=cycle_started_at,
+                    cycle_state="health_check_failed",
+                    per_symbol=cycle_report,
+                )
                 return
 
-        vix = self.dhan.get_vix()
+        vix = self._resolve_vix()
         if vix is None:
-            logger.warning("VIX unavailable — skipping cycle")
+            logger.warning("VIX unavailable and no recent fallback — skipping cycle")
+            self._write_runtime_status(
+                cycle_started_at=cycle_started_at,
+                cycle_state="vix_unavailable",
+                per_symbol=cycle_report,
+            )
             return
 
         # Fetch global context every 5 cycles (cached 5 min internally)
@@ -102,9 +129,13 @@ class AlgoBot:
 
         for index in INDICES:
             try:
-                self._process_index(index, vix, ctx, sent)
+                cycle_report[index] = self._process_index(index, vix, ctx, sent)
             except Exception as e:
                 logger.exception(f"Error processing {index}: {e}")
+                cycle_report[index] = {
+                    "status": "error",
+                    "error": str(e),
+                }
 
         s = self.engine.status()
         logger.info(
@@ -114,6 +145,39 @@ class AlgoBot:
             f"Trades={s['total_trades']} | "
             f"Sentiment={sent.label}/{sent.event_bias}"
         )
+        self._write_runtime_status(
+            cycle_started_at=cycle_started_at,
+            cycle_state="ok",
+            per_symbol=cycle_report,
+        )
+
+    def _resolve_vix(self) -> float | None:
+        """
+        Resolve current VIX with short-term fallback.
+        Keeps strategy loop alive during transient quote/API outages.
+        """
+        fresh = self.dhan.get_vix()
+        if fresh is not None:
+            self._last_good_vix = float(fresh)
+            self._last_good_vix_at = datetime.now(IST)
+            self._last_vix_source = "live"
+            return float(fresh)
+
+        if self._last_good_vix is not None and self._last_good_vix_at is not None:
+            age = (datetime.now(IST) - self._last_good_vix_at).total_seconds()
+            if age <= 20 * 60:
+                logger.warning(
+                    f"VIX fetch failed; using cached VIX={self._last_good_vix:.2f} "
+                    f"({int(age)}s old)"
+                )
+                self._last_vix_source = "cache"
+                return float(self._last_good_vix)
+
+        logger.warning(
+            f"VIX fetch failed with no cache; using fallback VIX={FALLBACK_VIX:.2f}"
+        )
+        self._last_vix_source = "fallback"
+        return float(FALLBACK_VIX)
 
     def monitor(self):
         """Check SL/Target for all open positions."""
@@ -134,23 +198,36 @@ class AlgoBot:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _process_index(self, index: str, vix: float, ctx, sent):
+    def _process_index(self, index: str, vix: float, ctx, sent) -> dict[str, object]:
         """Fetch data and run strategy cycle for one index."""
         sid = INDEX_SECURITY_IDS.get(index)
         if not sid:
-            return
-
-        spot_price = self.dhan.get_spot_price(index)
-        if not spot_price:
-            logger.debug(f"{index}: spot price unavailable")
-            return
+            return {
+                "status": "missing_security_id",
+                "spot_source": "none",
+            }
 
         df_1min = self.dhan.get_historical(sid, interval="minute",  days_back=1)
         df_5min = self.dhan.get_historical(sid, interval="5minute", days_back=1)
 
         if df_1min is None or df_5min is None or len(df_1min) < 15:
             logger.debug(f"{index}: insufficient candle data")
-            return
+            return {
+                "status": "insufficient_candles",
+                "spot_source": "none",
+                "candles_1m": 0 if df_1min is None else len(df_1min),
+                "candles_5m": 0 if df_5min is None else len(df_5min),
+            }
+
+        spot_price, spot_source = self._resolve_spot_price(index, df_1min)
+        if not spot_price:
+            logger.debug(f"{index}: spot price unavailable")
+            return {
+                "status": "spot_unavailable",
+                "spot_source": spot_source,
+                "candles_1m": len(df_1min),
+                "candles_5m": len(df_5min),
+            }
 
         expiry = ""
         chain_data = None
@@ -185,12 +262,74 @@ class AlgoBot:
             df_1min    = df_1min,
             df_5min    = df_5min,
         )
+        return {
+            "status": "processed",
+            "spot_source": spot_source,
+            "spot_price": round(float(spot_price), 2),
+            "candles_1m": len(df_1min),
+            "candles_5m": len(df_5min),
+            "option_chain": bool(chain_data),
+            "expiry": expiry,
+        }
+
+    def _resolve_spot_price(self, index: str, df_1min) -> tuple[float | None, str]:
+        """Resolve spot price from live quote, latest candle close, or short-lived cache."""
+        live_spot = self.dhan.get_spot_price(index)
+        if live_spot:
+            self._last_spot[index] = float(live_spot)
+            self._last_spot_at[index] = datetime.now(IST)
+            return float(live_spot), "live"
+
+        try:
+            if df_1min is not None and not df_1min.empty and "close" in df_1min.columns:
+                candle_spot = float(df_1min["close"].iloc[-1])
+                if candle_spot > 0:
+                    self._last_spot[index] = candle_spot
+                    self._last_spot_at[index] = datetime.now(IST)
+                    logger.debug(f"{index}: using latest 1m close as spot fallback ({candle_spot:.2f})")
+                    return candle_spot, "1m_close"
+        except Exception:
+            pass
+
+        cached_spot = self._last_spot.get(index)
+        cached_at = self._last_spot_at.get(index)
+        if cached_spot is not None and cached_at is not None:
+            age = (datetime.now(IST) - cached_at).total_seconds()
+            if age <= 15 * 60:
+                logger.debug(f"{index}: using cached spot fallback ({cached_spot:.2f}, {int(age)}s old)")
+                return float(cached_spot), "cache"
+
+        return None, "none"
+
+    def _write_runtime_status(
+        self,
+        cycle_started_at: datetime,
+        cycle_state: str,
+        per_symbol: dict[str, dict[str, object]],
+    ) -> None:
+        """Write lightweight heartbeat file for ops/debug/dashboard use."""
+        try:
+            self._heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "timestamp": datetime.now(IST).isoformat(),
+                "cycle_started_at": cycle_started_at.isoformat(),
+                "cycle_count": self._cycle_count,
+                "cycle_state": cycle_state,
+                "mode": "paper",
+                "vix_source": self._last_vix_source,
+                "last_good_vix": self._last_good_vix,
+                "symbols": per_symbol,
+                "engine": self.engine.status(),
+            }
+            self._heartbeat_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Runtime heartbeat write skipped: {e}")
 
     def _health_check(self) -> bool:
         """Verify Dhan API connectivity."""
         try:
-            vix = self.dhan.get_vix()
-            if vix:
+            vix = self._resolve_vix()
+            if vix is not None:
                 return True
             logger.warning("Health check: empty VIX response")
             return False
@@ -277,14 +416,15 @@ def main(mode: str, report: bool, weekly: bool, backtest: bool, backtest_pairs: 
     console.print(f"\n[bold cyan]🚀 Starting in {mode.upper()} mode[/bold cyan]")
     bot = AlgoBot()
 
-    # Start dashboard in background thread
-    try:
-        from dashboard.app import start_dashboard
-        t = threading.Thread(target=start_dashboard, args=(bot,), daemon=True)
-        t.start()
-        console.print("[green]📊 Dashboard: http://127.0.0.1:5000[/green]")
-    except Exception as e:
-        logger.warning(f"Dashboard could not start: {e}")
+    # Legacy Flask dashboard is kept as optional for backward compatibility.
+    if os.getenv("ENABLE_FLASK_DASHBOARD", "false").lower() in ("1", "true", "yes", "on"):
+        try:
+            from dashboard.app import start_dashboard
+            t = threading.Thread(target=start_dashboard, args=(bot,), daemon=True)
+            t.start()
+            console.print("[green]📊 Flask dashboard: http://127.0.0.1:5000[/green]")
+        except Exception as e:
+            logger.warning(f"Dashboard could not start: {e}")
 
     scheduler = BotScheduler(bot)
     try:

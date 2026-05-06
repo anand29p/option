@@ -81,15 +81,25 @@ class DhanClient:
         return {str(sid): float(v.get("last_price") or v.get("close", 0))
                 for sid, v in data.items() if v.get("last_price") or v.get("close")}
 
-    def get_spot_price(self, index: str) -> Optional[float]:
-        """Get current spot price for NIFTY, BANKNIFTY or FINNIFTY."""
-        sid = self.INDEX_SECURITY_IDS.get(index)
+    def get_spot_price(self, symbol: str, is_index: bool = True) -> Optional[float]:
+        """Get current spot price for any index or stock.
+        
+        Args:
+            symbol: Index (NIFTY, BANKNIFTY, FINNIFTY) or stock (TCS, INFY, etc.)
+            is_index: If True, treats as index (IDX_I); if False, treats as stock (NSE_EQ)
+        """
+        from config.settings import SECURITY_IDS
+        
+        sid = SECURITY_IDS.get(symbol)
         if not sid:
+            logger.warning(f"Security ID not found for {symbol}")
             return None
-        resp = _retry(self._dhan.ohlc_data, {self.IDX_I: [int(sid)]})
+        
+        exchange = self.IDX_I if is_index else self.NSE_EQ
+        resp = _retry(self._dhan.ohlc_data, {exchange: [int(sid)]})
         if not resp or resp.get("status") == "failure":
             return None
-        data = resp.get("data", {}).get(self.IDX_I, {})
+        data = resp.get("data", {}).get(exchange, {})
         for v in data.values():
             return float(v.get("last_price") or v.get("close", 0))
         return None
@@ -212,27 +222,47 @@ class DhanClient:
 
     # ── Option Chain ──────────────────────────────────────────────────────────
 
-    def get_option_chain(self, index: str, expiry: str) -> Optional[dict]:
-        """Fetch full option chain for an index on a given expiry date."""
-        sid = self.INDEX_SECURITY_IDS.get(index)
+    def get_option_chain(self, symbol: str, expiry: str, is_index: bool = True) -> Optional[dict]:
+        """Fetch full option chain for an index or stock on a given expiry date.
+        
+        Args:
+            symbol: Index (NIFTY, BANKNIFTY, FINNIFTY) or stock (TCS, INFY, etc.)
+            expiry: Expiry date string (YYYY-MM-DD)
+            is_index: If True, treats as index (IDX_I); if False, treats as stock (NSE_FNO)
+        """
+        from config.settings import SECURITY_IDS
+        
+        sid = SECURITY_IDS.get(symbol)
         if not sid:
+            logger.warning(f"Security ID not found for {symbol}")
             return None
+        
+        exchange = self.IDX_I if is_index else self.NSE_FNO
         resp = _retry(
             self._dhan.option_chain,
             under_security_id=int(sid),
-            under_exchange_segment=self.IDX_I,
+            under_exchange_segment=exchange,
             expiry=expiry,
         )
         return resp
 
-    def get_expiry_list(self, index: str) -> list[str]:
-        """Return list of upcoming expiry date strings for an index."""
-        sid = self.INDEX_SECURITY_IDS.get(index)
+    def get_expiry_list(self, symbol: str, is_index: bool = True) -> list[str]:
+        """Return list of upcoming expiry date strings for an index or stock.
+        
+        Args:
+            symbol: Index (NIFTY, BANKNIFTY, FINNIFTY) or stock (TCS, INFY, etc.)
+            is_index: If True, treats as index (IDX_I); if False, treats as stock (NSE_FNO)
+        """
+        from config.settings import SECURITY_IDS
+        
+        sid = SECURITY_IDS.get(symbol)
         if not sid:
             return []
+        
+        exchange = self.IDX_I if is_index else self.NSE_FNO
         resp = _retry(self._dhan.expiry_list,
                       under_security_id=int(sid),
-                      under_exchange_segment=self.IDX_I)
+                      under_exchange_segment=exchange)
         if not resp or resp.get("status") == "failure":
             return []
         return resp.get("data", {}).get("expiry_list", [])

@@ -16,7 +16,7 @@
 | **Risk Controls** | Daily loss limit · Max simultaneous trades · Trailing stop-loss |
 | **Global Context** | GIFT Nifty · Dow · Nasdaq · Nikkei · Hang Seng · Crude Oil via yfinance |
 | **News Sentiment** | ET Markets · Moneycontrol · Business Standard RSS + VADER NLP |
-| **Dashboard** | Live web UI at `http://localhost:5000` — P&L curve, positions, global markets |
+| **Dashboard** | Streamlit UI at `http://localhost:8501` (default) + optional legacy Flask UI at `http://localhost:5000` |
 | **Trade Journal** | Every trade logged to TinyDB + CSV with full charge breakdown (STT, GST, brokerage) |
 | **Backtesting** | Historical strategy validation via `--backtest` CLI flag |
 
@@ -65,7 +65,7 @@ DHAN_ACCESS_TOKEN=your_access_token_here
 ### 4. Run the Bot
 
 ```bash
-# Start paper trading (opens dashboard at http://localhost:5000)
+# Start paper trading (Streamlit dashboard is separate via --dashboard)
 python main.py
 
 # Or explicitly specify mode
@@ -76,7 +76,7 @@ python main.py --mode paper
 
 ## 🖥️ Dashboard
 
-The live web dashboard starts automatically at **[http://localhost:5000](http://localhost:5000)**
+Primary dashboard (Streamlit): **[http://localhost:8501](http://localhost:8501)**
 
 | Panel | What it shows |
 |---|---|
@@ -92,6 +92,13 @@ Dashboard-only mode (no trading):
 python main.py --dashboard
 ```
 
+Optional legacy Flask dashboard (disabled by default):
+```bash
+set ENABLE_FLASK_DASHBOARD=true
+python main.py
+# opens http://localhost:5000
+```
+
 ---
 
 ## 📋 CLI Commands
@@ -104,7 +111,7 @@ python main.py --weekly         # Print weekly summary and exit
 python main.py --backtest       # Run historical backtest simulation (all strategies)
 python main.py --backtest-pairs 2   # Backtest 2-signal pair combinations (100 days)
 python main.py --backtest-pairs 3   # Backtest 3-signal triplet combinations (100 days)
-python main.py --dashboard      # Start dashboard only (no trading)
+python main.py --dashboard      # Start Streamlit dashboard only (port 8501)
 ```
 
 ### Pair-Specific Backtest Examples
