@@ -35,6 +35,13 @@ RSS_FEEDS = {
     "NSE India":          "https://www.nseindia.com/api/rss",
 }
 
+SOURCE_WEIGHTS = {
+    "ET Markets": 1.0,
+    "Moneycontrol": 1.1,
+    "Business Standard": 0.95,
+    "NSE India": 1.15,
+}
+
 # ── Financial keyword sentiment boosters ─────────────────────────────────────
 BULLISH_KEYWORDS = {
     "rally", "surge", "gain", "bull", "bullish", "breakout", "uptrend",
@@ -48,6 +55,23 @@ BEARISH_KEYWORDS = {
     "rate hike", "inflation", "concern", "risk", "volatility spike",
 }
 
+EVENT_BULLISH_KEYWORDS = {
+    "rate cut", "policy support", "stimulus", "liquidity boost",
+    "strong guidance", "beat estimates", "upgrade", "buyback",
+    "fii buying", "dii buying", "surplus monsoon",
+}
+EVENT_BEARISH_KEYWORDS = {
+    "rbi policy", "hawkish", "rate hike", "sticky inflation", "cpi",
+    "wpi", "fed", "budget tax", "tariff", "war", "geopolitical",
+    "downgrade", "weak guidance", "earnings miss", "fii selling",
+    "default", "ban", "probe", "selloff", "margin hike",
+}
+VOLATILITY_EVENT_KEYWORDS = {
+    "expiry", "weekly expiry", "monthly expiry", "policy",
+    "budget", "results", "earnings", "ipo", "listing", "payrolls",
+    "cpi", "gdp", "fomc", "rbi", "election", "opec",
+}
+
 
 @dataclass
 class SentimentScore:
@@ -58,6 +82,10 @@ class SentimentScore:
     confidence:  float        = 0.0   # 0-1 (how many headlines agree)
     headline_count: int       = 0
     top_headlines: list       = field(default_factory=list)   # Top 5 headlines
+    event_score: float        = 0.0
+    event_bias:  str          = "NEUTRAL"
+    event_count: int          = 0
+    active_events: list       = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +95,10 @@ class SentimentScore:
             "confidence":     round(self.confidence, 2),
             "headline_count": self.headline_count,
             "top_headlines":  self.top_headlines[:5],
+            "event_score":    round(self.event_score, 3),
+            "event_bias":     self.event_bias,
+            "event_count":    self.event_count,
+            "active_events":  self.active_events[:8],
         }
 
 
@@ -113,7 +145,8 @@ class NewsSentimentAnalyzer:
             self._cached_at = now
             logger.info(
                 f"📰 Sentiment: {result.label} (score={result.score:+.2f} "
-                f"confidence={result.confidence:.0%} n={result.headline_count})"
+                f"confidence={result.confidence:.0%} n={result.headline_count} "
+                f"event={result.event_bias}:{result.event_count})"
             )
             return result
         except Exception as e:
@@ -128,10 +161,15 @@ class NewsSentimentAnalyzer:
             return SentimentScore()
 
         scores     = []
+        weighted_scores = []
+        event_scores = []
+        active_events: dict[str, int] = {}
         top_hl     = []
         seen_today = set()
 
-        for hl in headlines:
+        for item in headlines:
+            hl = item["headline"]
+            source = item["source"]
             # Dedup
             h = hashlib.md5(hl.encode()).hexdigest()
             if h in seen_today:
@@ -140,20 +178,36 @@ class NewsSentimentAnalyzer:
 
             vader_raw = self._vader.polarity_scores(hl)["compound"]
             boost     = self._keyword_boost(hl)
+            event_boost, matched_events = self._event_boost(hl)
             final     = max(-1.0, min(1.0, vader_raw + boost))
             scores.append(final)
-            top_hl.append({"headline": hl[:120], "score": round(final, 3)})
+            weight = SOURCE_WEIGHTS.get(source, 1.0)
+            weighted_scores.append(final * weight)
+            event_scores.append(event_boost * weight)
+            for event in matched_events:
+                active_events[event] = active_events.get(event, 0) + 1
+            top_hl.append(
+                {
+                    "headline": hl[:120],
+                    "score": round(final, 3),
+                    "source": source,
+                    "event_score": round(event_boost, 3),
+                    "events": matched_events[:3],
+                }
+            )
 
         if not scores:
             return SentimentScore()
 
-        avg   = sum(scores) / len(scores)
+        avg   = sum(weighted_scores) / max(1, len(weighted_scores))
         agree = sum(1 for s in scores if (s > 0.05) == (avg > 0.05))
         conf  = agree / len(scores)
         label = "BULLISH" if avg > 0.05 else ("BEARISH" if avg < -0.05 else "NEUTRAL")
+        event_avg = sum(event_scores) / max(1, len(event_scores))
+        event_bias = "BULLISH" if event_avg > 0.05 else ("BEARISH" if event_avg < -0.05 else "NEUTRAL")
 
         # Sort top headlines by absolute score
-        top_hl.sort(key=lambda x: abs(x["score"]), reverse=True)
+        top_hl.sort(key=lambda x: abs(x["score"]) + abs(x.get("event_score", 0.0)), reverse=True)
 
         return SentimentScore(
             score=round(avg, 3),
@@ -161,11 +215,15 @@ class NewsSentimentAnalyzer:
             confidence=round(conf, 3),
             headline_count=len(scores),
             top_headlines=top_hl[:5],
+            event_score=round(event_avg, 3),
+            event_bias=event_bias,
+            event_count=sum(active_events.values()),
+            active_events=[name for name, _ in sorted(active_events.items(), key=lambda item: item[1], reverse=True)],
         )
 
-    def _fetch_headlines(self) -> list[str]:
+    def _fetch_headlines(self) -> list[dict]:
         import requests
-        headlines = []
+        headlines: list[dict] = []
         for source, url in RSS_FEEDS.items():
             try:
                 # Use requests to fetch with a strict timeout to prevent hanging
@@ -174,7 +232,7 @@ class NewsSentimentAnalyzer:
                 for entry in feed.entries[:15]:
                     title = getattr(entry, "title", "")
                     if title:
-                        headlines.append(title)
+                        headlines.append({"source": source, "headline": title})
             except Exception as e:
                 logger.debug(f"RSS fetch failed for {source}: {e}")
         return headlines
@@ -189,6 +247,24 @@ class NewsSentimentAnalyzer:
             if kw in lower:
                 score -= boost
         return max(-0.5, min(0.5, score))
+
+    def _event_boost(self, text: str, boost: float = 0.20) -> tuple[float, list[str]]:
+        lower = text.lower()
+        score = 0.0
+        matched: list[str] = []
+        for kw in EVENT_BULLISH_KEYWORDS:
+            if kw in lower:
+                score += boost
+                matched.append(kw)
+        for kw in EVENT_BEARISH_KEYWORDS:
+            if kw in lower:
+                score -= boost
+                matched.append(kw)
+        for kw in VOLATILITY_EVENT_KEYWORDS:
+            if kw in lower:
+                matched.append(kw)
+        deduped = list(dict.fromkeys(matched))
+        return max(-0.6, min(0.6, score)), deduped
 
 
 # Module-level singleton

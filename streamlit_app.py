@@ -460,17 +460,23 @@ with right:
         st.markdown(f"### :{color}[{label}]")
         st.metric("Score", f"{_safe_float(sent.get('score', 0.0)):+.3f}")
         st.metric("Confidence", f"{_safe_float(sent.get('confidence', 0.0))*100:.0f}%")
+        event_bias = str(sent.get("event_bias", "NEUTRAL"))
+        st.metric("Event Bias", event_bias)
         st.caption(f"Headlines analyzed: {sent.get('headline_count', 0)}")
+        active_events = sent.get("active_events", [])
+        if active_events:
+            st.caption("Event tags: " + ", ".join(str(x) for x in active_events[:5]))
         top_headlines = sent.get("top_headlines", [])
         if top_headlines:
             st.markdown("<div class='small-note'><b>Top headlines</b></div>", unsafe_allow_html=True)
             for item in top_headlines:
                 score = _safe_float(item.get("score", 0.0), 0.0)
                 tag_class = "tag-good" if score > 0 else ("tag-bad" if score < 0 else "tag-neutral")
+                source = str(item.get("source", "")).strip()
                 st.markdown(
                     f"""
                     <div class="headline-box">
-                        {item.get('headline', '')}
+                        {f'<div class="small-note">{source}</div>' if source else ''}{item.get('headline', '')}
                         <span class="tag {tag_class}" style="float:right; margin-right:0;">{score:+.2f}</span>
                     </div>
                     """,

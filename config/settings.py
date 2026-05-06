@@ -127,7 +127,10 @@ TRADE_LOG   = f"{LOG_DIR}/trades.csv"
 # Example: FINNIFTY:RSIDivergence
 ACTIVE_STRATEGY_ALLOWLIST = {
     tuple(item.strip().split(":", 1))
-    for item in os.getenv("ACTIVE_STRATEGY_ALLOWLIST", "FINNIFTY:RSIDivergence").split(",")
+    for item in os.getenv(
+        "ACTIVE_STRATEGY_ALLOWLIST",
+        "BANKNIFTY:RSIDivergence,BANKNIFTY:VWAPReversion,BANKNIFTY:ORBBreakout,BANKNIFTY:MeanReversion",
+    ).split(",")
     if ":" in item.strip()
 }
 SHADOW_SIGNAL_LOG = os.getenv("SHADOW_SIGNAL_LOG", "true").lower() in ("1", "true", "yes", "on")

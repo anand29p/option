@@ -25,7 +25,8 @@ from rich import box
 
 from config.settings import (
     INDICES, PAPER_CAPITAL, STOP_LOSS_PCT, TARGET_PCT_MIN,
-    LOG_DIR, IST
+    LOG_DIR, IST, ACTIVE_STRATEGY_ALLOWLIST,
+    SIGNAL_CONSENSUS_ENABLED, MIN_SIGNAL_CONSENSUS,
 )
 from utils.tax_calculator import calculate_net_pnl
 from utils.market_data_recorder import load_recorded_ohlcv, load_recorded_atm_options
@@ -48,6 +49,7 @@ class BtTrade:
     net_pnl:     float   = 0.0
     charges:     float   = 0.0
     quantity:    int     = 1   # normalized to 1 unit for backtesting
+    signal_sources: str  = ""
 
 
 @dataclass
@@ -389,6 +391,26 @@ STRATEGIES = {
 }
 
 LOT_SIZE = 25   # Use NIFTY lot size for normalization
+LIVE_STRATEGY_PRIORITY = [
+    "GapAndGo",
+    "ORBBreakout",
+    "ScalpMomentum",
+    "MeanReversion",
+    "VWAPReversion",
+    "RSIDivergence",
+    "SuperTrendMomentum",
+    "EMACrossover",
+]
+
+BACKTEST_SIGNAL_MAP = {
+    "ScalpMomentum": _signal_scalp,
+    "MeanReversion": _signal_mr,
+    "VWAPReversion": _signal_vwap_rev,
+    "RSIDivergence": _signal_rsi_div,
+    "SuperTrendMomentum": None,
+    "EMACrossover": None,
+    "ORBBreakout": None,
+}
 
 
 def _backtest_strategy(
@@ -559,6 +581,196 @@ def _backtest_strategy(
     return result
 
 
+def _active_backtest_strategies(index: str) -> list[str]:
+    active = {
+        strategy_name
+        for idx, strategy_name in ACTIVE_STRATEGY_ALLOWLIST
+        if idx == index and strategy_name in BACKTEST_SIGNAL_MAP
+    }
+    return [name for name in LIVE_STRATEGY_PRIORITY if name in active]
+
+
+def _pick_consensus_signal(signal_rows: list[dict]) -> tuple[Optional[dict], int]:
+    if not signal_rows:
+        return None, 0
+
+    if not SIGNAL_CONSENSUS_ENABLED:
+        return signal_rows[0], 1
+
+    grouped: dict[str, list[dict]] = {}
+    for row in signal_rows:
+        grouped.setdefault(row["signal"], []).append(row)
+
+    qualifying = [
+        rows for rows in grouped.values()
+        if len(rows) >= MIN_SIGNAL_CONSENSUS
+    ]
+    if not qualifying:
+        return None, 0
+
+    best_rows = max(
+        qualifying,
+        key=lambda rows: (
+            len(rows),
+            -min(LIVE_STRATEGY_PRIORITY.index(item["strategy"]) for item in rows),
+        ),
+    )
+    chosen = min(best_rows, key=lambda item: LIVE_STRATEGY_PRIORITY.index(item["strategy"]))
+    return chosen, len(best_rows)
+
+
+def _backtest_consensus_portfolio(
+    index: str,
+    df: pd.DataFrame,
+    option_df: Optional[pd.DataFrame] = None,
+) -> Optional[BtResult]:
+    """Backtest a live-like consensus portfolio using only active strategies."""
+    strategy_names = _active_backtest_strategies(index)
+    if not strategy_names:
+        return None
+
+    result = BtResult(strategy="ConsensusGate", index=index)
+    open_trade: Optional[BtTrade] = None
+    strategy_state = {
+        "ORBBreakout": {"set": False, "high": 0.0, "low": 0.0},
+        "SuperTrendMomentum": {"st_dir": 0},
+        "EMACrossover": {"n": 0, "last_cross": 0},
+    }
+
+    for i in range(1, len(df)):
+        bar = df.iloc[i]
+        ts = df.index[i]
+
+        if i % 375 == 374:
+            strategy_state["ORBBreakout"] = {"set": False, "high": 0.0, "low": 0.0}
+
+        if open_trade:
+            prem = _lookup_recorded_option_price(
+                option_df=option_df,
+                ts=ts,
+                option_type=open_trade.option_type,
+                spot_price=float(bar["close"]),
+            )
+            if prem is None:
+                prem = _mark_premium(open_trade, bar["close"])
+            sl = open_trade.entry_price * (1 - STOP_LOSS_PCT)
+            tgt = open_trade.entry_price * (1 + TARGET_PCT_MIN)
+            reason = None
+            exit_p = prem
+            if i % 375 == 374:
+                reason = "eod"
+            elif prem <= sl:
+                reason, exit_p = "stop_loss", sl
+            elif prem >= tgt:
+                reason, exit_p = "target_hit", tgt
+            if reason:
+                pnl_obj = calculate_net_pnl(open_trade.entry_price, exit_p, LOT_SIZE)
+                open_trade.exit_bar = i
+                open_trade.exit_price = exit_p
+                open_trade.exit_reason = reason
+                open_trade.net_pnl = pnl_obj.charge_breakdown["net_pnl"]
+                open_trade.charges = pnl_obj.charge_breakdown["total_charges"]
+                result.trades.append(open_trade)
+                open_trade = None
+            continue
+
+        signal_rows: list[dict] = []
+        for strategy_name in strategy_names:
+            try:
+                if strategy_name == "ORBBreakout":
+                    orb_state = strategy_state["ORBBreakout"]
+                    if not orb_state["set"] and i <= 15:
+                        orb_state["high"] = max(orb_state.get("high", 0.0), float(bar["high"]))
+                        orb_state["low"] = min(orb_state.get("low", 9999999.0), float(bar["low"]))
+                        if i == 15:
+                            orb_state["set"] = True
+                        continue
+                    signal = _signal_orb(df, i, orb_state)
+                elif strategy_name == "SuperTrendMomentum":
+                    signal = _signal_supertrend(df, i, strategy_state["SuperTrendMomentum"])
+                elif strategy_name == "EMACrossover":
+                    signal = _signal_ema_cross(df, i, strategy_state["EMACrossover"])
+                else:
+                    signal = BACKTEST_SIGNAL_MAP[strategy_name](df, i)
+            except Exception:
+                signal = "NONE"
+
+            if signal != "NONE":
+                signal_rows.append({"strategy": strategy_name, "signal": signal})
+
+        chosen, consensus_count = _pick_consensus_signal(signal_rows)
+        if chosen is None:
+            continue
+
+        option_type = "CE" if chosen["signal"] == "BUY_CE" else "PE"
+        entry_spot = float(bar["close"])
+        entry_prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=ts,
+            option_type=option_type,
+            spot_price=entry_spot,
+        )
+        if entry_prem is None:
+            entry_prem = _simulate_premium(entry_spot, index, option_type)
+        if entry_prem <= 0:
+            continue
+
+        agreeing = [row["strategy"] for row in signal_rows if row["signal"] == chosen["signal"]]
+        open_trade = BtTrade(
+            strategy="ConsensusGate",
+            index=index,
+            option_type=option_type,
+            entry_bar=i,
+            entry_spot=entry_spot,
+            entry_price=entry_prem,
+            quantity=LOT_SIZE,
+            signal_sources="|".join(agreeing[:consensus_count]),
+        )
+
+    if open_trade:
+        bar = df.iloc[-1]
+        prem = _lookup_recorded_option_price(
+            option_df=option_df,
+            ts=df.index[-1],
+            option_type=open_trade.option_type,
+            spot_price=float(bar["close"]),
+        )
+        if prem is None:
+            prem = _mark_premium(open_trade, bar["close"])
+        pnl_obj = calculate_net_pnl(open_trade.entry_price, prem, LOT_SIZE)
+        open_trade.exit_bar = len(df) - 1
+        open_trade.exit_price = prem
+        open_trade.exit_reason = "final_bar"
+        open_trade.net_pnl = pnl_obj.charge_breakdown["net_pnl"]
+        open_trade.charges = pnl_obj.charge_breakdown["total_charges"]
+        result.trades.append(open_trade)
+
+    wins = [t for t in result.trades if t.net_pnl >= 0]
+    losses = [t for t in result.trades if t.net_pnl < 0]
+    result.total_trades = len(result.trades)
+    result.winners = len(wins)
+    result.losers = len(losses)
+    result.gross_pnl = sum((t.exit_price - t.entry_price) * t.quantity for t in result.trades)
+    result.total_charges = sum(t.charges for t in result.trades)
+    result.net_pnl = sum(t.net_pnl for t in result.trades)
+    result.win_rate = round(len(wins) / max(1, result.total_trades) * 100, 1)
+    result.avg_win = round(sum(t.net_pnl for t in wins) / max(1, len(wins)), 2)
+    result.avg_loss = round(sum(t.net_pnl for t in losses) / max(1, len(losses)), 2)
+    gross_wins = sum(t.net_pnl for t in wins)
+    gross_losses = abs(sum(t.net_pnl for t in losses))
+    result.profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else 0.0
+
+    equity = 0.0
+    peak = 0.0
+    drawdown = 0.0
+    for trade in result.trades:
+        equity += trade.net_pnl
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    result.max_drawdown = round(drawdown, 2)
+    return result
+
+
 # ── HTML Report ───────────────────────────────────────────────────────────────
 
 def _generate_html_report(all_results: list[BtResult], days: int):
@@ -683,6 +895,7 @@ def _export_csv_results(all_results: list[BtResult], days: int) -> tuple[Optiona
             "exit_bar": t.exit_bar,
             "exit_price": round(t.exit_price, 2),
             "exit_reason": t.exit_reason,
+            "signal_sources": t.signal_sources,
             "net_pnl": round(t.net_pnl, 2),
             "charges": round(t.charges, 2),
             "quantity": t.quantity,
@@ -847,6 +1060,15 @@ def run_backtest(days: int = 5):
             console.print(
                 f"  {icon} {name:22s} | {r.total_trades:3d} trades | "
                 f"WR={r.win_rate:5.1f}% | Net=₹{r.net_pnl:+,.0f}"
+            )
+
+        consensus_result = _backtest_consensus_portfolio(index=index, df=df, option_df=option_df)
+        if consensus_result is not None:
+            all_results.append(consensus_result)
+            icon = "🟢" if consensus_result.net_pnl >= 0 else "🔴"
+            console.print(
+                f"  {icon} {'ConsensusGate':22s} | {consensus_result.total_trades:3d} trades | "
+                f"WR={consensus_result.win_rate:5.1f}% | Net=₹{consensus_result.net_pnl:+,.0f}"
             )
 
     # Summary table

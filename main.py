@@ -76,7 +76,10 @@ class AlgoBot:
         )
 
         sent = get_news_sentiment(force=True)
-        logger.info(f"📰 News sentiment: {sent.label} (score={sent.score:+.2f})")
+        logger.info(
+            f"📰 News sentiment: {sent.label} (score={sent.score:+.2f}) "
+            f"| Event={sent.event_bias} ({sent.event_count})"
+        )
 
     def run_cycle(self):
         """Main strategy cycle — called every minute by scheduler."""
@@ -108,7 +111,7 @@ class AlgoBot:
             f"Open={s['open_positions']} | "
             f"DayP&L=₹{s['daily_pnl']:+.2f} | "
             f"Trades={s['total_trades']} | "
-            f"Sentiment={sent.label}"
+            f"Sentiment={sent.label}/{sent.event_bias}"
         )
 
     def monitor(self):
