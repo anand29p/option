@@ -25,7 +25,7 @@ from config.settings import (
     INDICES,
     IST,
     LOG_DIR,
-    INDEX_SECURITY_IDS,
+    SECURITY_IDS,
     FALLBACK_VIX,
     RUNTIME_STATUS_FILE,
 )
@@ -199,13 +199,17 @@ class AlgoBot:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _process_index(self, index: str, vix: float, ctx, sent) -> dict[str, object]:
-        """Fetch data and run strategy cycle for one index."""
-        sid = INDEX_SECURITY_IDS.get(index)
+        """Fetch data and run strategy cycle for one symbol (index or stock)."""
+        from config.settings import SECURITY_IDS
+        
+        symbol_cfg = INDICES.get(index)
+        if not symbol_cfg:
+            return {"status": "unknown_symbol", "spot_source": "none"}
+        
+        is_index = symbol_cfg.get("type") == "index"
+        sid = SECURITY_IDS.get(index)
         if not sid:
-            return {
-                "status": "missing_security_id",
-                "spot_source": "none",
-            }
+            return {"status": "missing_security_id", "spot_source": "none"}
 
         df_1min = self.dhan.get_historical(sid, interval="minute",  days_back=1)
         df_5min = self.dhan.get_historical(sid, interval="5minute", days_back=1)
@@ -219,7 +223,7 @@ class AlgoBot:
                 "candles_5m": 0 if df_5min is None else len(df_5min),
             }
 
-        spot_price, spot_source = self._resolve_spot_price(index, df_1min)
+        spot_price, spot_source = self._resolve_spot_price(index, df_1min, is_index=is_index)
         if not spot_price:
             logger.debug(f"{index}: spot price unavailable")
             return {
@@ -232,9 +236,9 @@ class AlgoBot:
         expiry = ""
         chain_data = None
         try:
-            expiry = get_nearest_weekly_expiry(self.dhan, index) or ""
+            expiry = get_nearest_weekly_expiry(self.dhan, index, is_index=is_index) or ""
             if expiry:
-                chain_resp = self.dhan.get_option_chain(index, expiry)
+                chain_resp = self.dhan.get_option_chain(index, expiry, is_index=is_index)
                 if chain_resp and chain_resp.get("status") != "failure":
                     chain_data = chain_resp.get("data", {})
         except Exception as e:
@@ -245,12 +249,12 @@ class AlgoBot:
             self.recorder.record_cycle(
                 index=index,
                 spot_price=spot_price,
-                vix=vix,
+                vix=vix if is_index else None,
                 df_1min=df_1min,
                 df_5min=df_5min,
                 option_chain=chain_data,
                 option_expiry=expiry,
-                strike_step=INDICES[index]["strike_step"],
+                strike_step=symbol_cfg["strike_step"],
             )
         except Exception as e:
             logger.debug(f"{index}: data recorder skipped ({e})")
@@ -258,7 +262,7 @@ class AlgoBot:
         self.selector.run_cycle(
             index      = index,
             spot_price = spot_price,
-            vix        = vix,
+            vix        = vix if is_index else None,
             df_1min    = df_1min,
             df_5min    = df_5min,
         )
@@ -270,11 +274,12 @@ class AlgoBot:
             "candles_5m": len(df_5min),
             "option_chain": bool(chain_data),
             "expiry": expiry,
+            "type": "index" if is_index else "stock",
         }
 
-    def _resolve_spot_price(self, index: str, df_1min) -> tuple[float | None, str]:
+    def _resolve_spot_price(self, index: str, df_1min, is_index: bool = True) -> tuple[float | None, str]:
         """Resolve spot price from live quote, latest candle close, or short-lived cache."""
-        live_spot = self.dhan.get_spot_price(index)
+        live_spot = self.dhan.get_spot_price(index, is_index=is_index)
         if live_spot:
             self._last_spot[index] = float(live_spot)
             self._last_spot_at[index] = datetime.now(IST)
